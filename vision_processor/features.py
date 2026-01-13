@@ -116,7 +116,8 @@ class FeatureExtractor:
 
     def _calculate_arm_angle(self, landmarks: list) -> float:
         """
-        Average arm elevation angle (0 = down, 1 = horizontal or above).
+        Average arm elevation angle.
+        0 = arms down, 1 = arms horizontal or above.
         """
         # Shoulders and wrists
         left_shoulder = landmarks[11]
@@ -137,6 +138,7 @@ class FeatureExtractor:
     def _calculate_vertical_extension(self, landmarks: list) -> float:
         """
         How vertically extended the body is (crouching vs stretching).
+        0 = crouching, 1 = fully stretched.
         """
         nose = landmarks[0]
         left_ankle = landmarks[27]
@@ -167,7 +169,7 @@ class FeatureExtractor:
         return smoothed
 
     def _empty_features(self) -> dict:
-        """Return zero features when no valid pose detected."""
+        """Return default features when no valid pose detected."""
         return {
             "energy": 0.0,
             "symmetry": 0.0,
