@@ -183,23 +183,35 @@ Features implemented in `features.py`:
 
 ```
 cuerposonoro/
-├── vision_processor/       # Perception + feature extraction module
+├── vision_processor/           # Perception + feature extraction module
 │   ├── __init__.py
-│   ├── capture.py          # Camera abstraction layer
-│   ├── pose.py             # MediaPipe pose estimation wrapper
-│   ├── features.py         # Motion feature extraction algorithms
-│   └── osc_sender.py       # OSC communication to SuperCollider
-├── audio_engine/           # SuperCollider audio synthesis
+│   ├── capture.py              # Camera abstraction layer
+│   ├── pose.py                 # MediaPipe pose estimation wrapper
+│   ├── features.py             # Motion feature extraction (17 features)
+│   ├── osc_sender.py           # OSC communication to SuperCollider
+│   └── midi_sender.py          # MIDI/MPE communication to Surge XT
+├── audio_engine/               # SuperCollider audio synthesis
 │   └── ...
-├── supercollider/          # SuperCollider SynthDef files
+├── supercollider/              # SuperCollider SynthDef files
 │   └── ...
-├── tests/                  # Integration and unit tests
-│   └── ...
-├── logs/                   # Session logs (CSV) for analysis
-├── main.py                 # Application entry point
-├── config.yaml             # Centralized configuration
-├── requirements.in         # Top-level dependencies
-├── requirements.txt        # Pinned dependencies (pip-tools)
+├── tests/
+│   ├── unit/                   # Automated unit tests (pytest)
+│   │   └── test_features.py
+│   ├── integration/            # Automated integration tests (pytest)
+│   │   └── test_integration.py
+│   └── manual/                 # Interactive scripts (require hardware)
+│       ├── README.md
+│       ├── manual_camera.py
+│       ├── manual_pose.py
+│       ├── manual_osc.py
+│       ├── manual_midi_sender.py
+│       ├── manual_e2e_osc.py
+│       └── manual_e2e_midi_debug.py
+├── logs/                       # Session logs (CSV) for analysis
+├── main.py                     # Application entry point
+├── config.yaml                 # Centralized configuration
+├── requirements.in             # Top-level dependencies
+├── requirements.txt            # Pinned dependencies (pip-tools)
 ├── LICENSE
 └── README.md
 ```
@@ -286,16 +298,31 @@ Pose detection runs client-side in the browser using MediaPipe.js. Landmarks are
 
 ---
 
-## Performance Targets
+## Testing
 
-| Metric | Target | Acceptable | Status |
-|--------|--------|------------|--------|
-| End-to-end latency | ≤ 80ms | 80–100ms | 
-| Frame rate | ≥ 30 FPS sustained | 28–30 FPS |
-| Valid frames (pose detection) | ≥ 90% | — | 
+The project has a three-tier testing strategy:
 
-Latency is measured from frame capture timestamp to OSC message reception. The system logs session data to CSV files in `logs/` for post-hoc analysis with tools like pandas and matplotlib.
+**Automated tests (no hardware required):**
+```bash
+pytest tests/ -v                          # all automated (129 tests)
+pytest tests/unit/ -v                     # unit tests only (80 tests)
+pytest tests/integration/ -v              # integration tests only (~50 tests)
+```
 
+- **Unit tests** (`tests/unit/test_features.py`) — test all 17 feature extraction methods with synthetic landmark data. Cover output ranges, edge cases, temporal smoothing, and boundary conditions.
+- **Integration tests** (`tests/integration/test_integration.py`) — test OSCSender, MidiSender, and full pipeline flows with mocked I/O (no SuperCollider or Surge XT needed).
+
+**Manual tests (require hardware):**
+
+Interactive scripts for validating the full system with real camera input and audio output. See [`tests/manual/README.md`](tests/manual/README.md) for prerequisites and usage instructions.
+```bash
+python tests/manual/manual_camera.py      # verify webcam
+python tests/manual/manual_pose.py        # test pose detection
+python tests/manual/manual_e2e_osc.py     # full pipeline → SuperCollider
+python tests/manual/manual_e2e_midi_debug.py  # full pipeline → Surge XT
+```
+
+Manual E2E tests generate CSV logs in `tests/manual/logs/` with per-frame data for post-hoc analysis.
 ---
 
 ## Testing
