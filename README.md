@@ -403,7 +403,7 @@ This project is open source. See the [LICENSE](LICENSE) file for details.
 ## Author
 
 **Ana María Jurado Crespo**
-- GitHub: [@AmarilloBit](https://github.com/AmarilloBit)
+- Web: [maramotto.com](https://maramotto.com)
 - Github:  [@maramotto](https://github.com/maramotto)
 - Email: am.juradoc@alumnos.urjc.es
 - University: ETSII, Universidad Rey Juan Carlos
