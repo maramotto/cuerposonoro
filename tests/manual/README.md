@@ -72,6 +72,19 @@ End-to-end test: Camera → Pose → Features → MIDI → Surge XT, with CSV lo
 
 ---
 
+### manual_midi_sender.py — MIDI Sender Unit Test
+Tests MidiSender in isolation: chord changes, melody triggers, expression.
+
+**Requires:** Surge XT  
+**Setup:**
+1. Open Surge XT Standalone
+2. Go to Menu → MIDI Settings
+3. Select "Cuerpo Sonoro" as MIDI input
+4. Enable MPE mode
+
+**Run:** `python tests/manual/manual_midi_sender.py`  
+**Shows:** Chord changes, note triggers, expression values
+
 ## Logs
 
 The `logs/` folder contains CSV files from previous MIDI debug sessions and screenshots. These are gitignored except for the directory structure.
