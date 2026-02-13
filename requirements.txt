@@ -18,6 +18,8 @@ flatbuffers==25.12.19
     # via mediapipe
 fonttools==4.61.1
     # via matplotlib
+iniconfig==2.3.0
+    # via pytest
 jax==0.4.38
     # via mediapipe
 jaxlib==0.4.38
@@ -53,15 +55,23 @@ opencv-python==4.12.0.88
 opt-einsum==3.4.0
     # via jax
 packaging==25.0
-    # via matplotlib
+    # via
+    #   matplotlib
+    #   pytest
 pillow==12.1.0
     # via matplotlib
+pluggy==1.6.0
+    # via pytest
 protobuf==4.25.8
     # via mediapipe
 pycparser==2.23
     # via cffi
+pygments==2.19.2
+    # via pytest
 pyparsing==3.3.1
     # via matplotlib
+pytest==9.0.2
+    # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via matplotlib
 python-osc==1.9.3
