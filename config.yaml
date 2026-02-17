@@ -1,0 +1,123 @@
+# =============================================================================
+# CUERPO SONORO — Configuration
+# =============================================================================
+#
+# Central configuration for the entire pipeline.
+# Load with: from vision_processor.config import Config
+#            config = Config()  # reads this file
+#
+# Override at runtime:
+#            config = Config(overrides={"camera.device_id": 1, "pose.model_complexity": 0})
+#
+
+# Camera
+
+camera:
+  device_id: 0             # 0 = default (usually MacBook), 1 = external USB
+  width: 1280
+  height: 720
+  fps: 30
+  buffer_size: 1            # 1 = minimal buffer (lower latency, may drop frames)
+
+# Named camera profiles (used by benchmark to iterate over cameras)
+camera_profiles:
+  macbook:
+    device_id: 0
+    name: "MacBook Pro Built-in"
+  c922:
+    device_id: 1
+    name: "Logitech C922"
+
+
+# Pose Estimation
+
+pose:
+  model_complexity: 1       # 0 = Lite, 1 = Full, 2 = Heavy
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+
+
+# Feature Extraction
+
+features:
+  smoothing_factor: 0.3     # Exponential smoothing alpha (0 = no change, 1 = no smoothing)
+
+
+# Output Mode
+# Which output to use: "osc" (SuperCollider) or "midi" (Surge XT / external synth)
+
+output:
+  mode: osc                 # "osc" or "midi"
+
+
+# OSC (SuperCollider)
+
+osc:
+  host: "127.0.0.1"
+  port: 57120
+  send_mode: individual     # "individual" = one message per feature
+                            # "bundle"     = all features in one OSC bundle
+
+
+# MIDI / MPE (Surge XT)
+
+midi:
+  port_name: "CuerpoSonoro"
+  jerk_threshold: 0.4       # Minimum hand jerk to trigger a melody note
+  base_note_duration: 0.3   # Base note duration in seconds
+  min_note_duration: 0.15
+  max_note_duration: 0.6
+
+
+# Audio Presets
+# Placeholder structure for sound design presets.
+# These don't affect the benchmark but allow you to store and switch between
+# different sound configurations for SuperCollider and Surge XT.
+
+audio:
+  supercollider:
+    active_preset: default
+    presets:
+      default:
+        synthdef: bodySound
+        description: "LFSaw + RLPF, energy→cutoff, symmetry→pan"
+        # Parameters controlled by OSC — these are the SC-side mappings:
+        # /motion/energy   → cutoff (200–4000 Hz), amp (0.1–0.5)
+        # /motion/symmetry → pan (-1 to 1)
+        # /motion/armAngle → freq (110–440 Hz)
+        # /motion/smoothness → resonance (0.1–0.5)
+      # Add more presets here, for example:
+      # ambient:
+      #   synthdef: ambientPad
+      #   description: "Detuned sines + long reverb"
+
+  surge_xt:
+    active_preset: default
+    presets:
+      default:
+        description: "Default MPE patch in Surge XT"
+        # Surge XT presets are managed inside the synth itself.
+        # This section is for documenting which patch to load.
+      # Add more presets here, for example:
+      # warm_pad:
+      #   description: "MPE pad with slow attack, use with gentle movements"
+
+
+# Benchmark
+# Configuration for benchmark_latency.py
+# These define which combinations to test.
+
+benchmark:
+  frames: 300               # Frames to measure per configuration
+  warmup: 30                # Warmup frames to discard (let CPU/camera stabilize)
+  resolutions:
+    - { width: 640,  height: 480, name: "480p" }
+    - { width: 1280, height: 720, name: "720p" }
+  pose_models:
+    - { model_complexity: 0, name: "lite" }
+    - { model_complexity: 1, name: "full" }
+    - { model_complexity: 2, name: "heavy" }
+  output_modes:
+    - { mode: osc,  send_mode: individual, name: "osc" }
+    - { mode: osc,  send_mode: bundle,     name: "osc_bundle" }
+    - { mode: midi, send_mode: ~,          name: "midi" }
