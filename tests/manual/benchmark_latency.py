@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""
+Latency benchmark for Cuerpo Sonoro pipeline.
+
+Generates all meaningful combinations of camera × resolution × pose model ×
+output mode from config.yaml, and measures per-stage latency for each.
+
+Runs WITHOUT OpenCV display to avoid contaminating measurements.
+
+Usage:
+    # Run all combinations for all cameras
+    python tests/manual/benchmark_latency.py
+
+    # Run only a specific camera
+    python tests/manual/benchmark_latency.py --camera-profile c922
+    python tests/manual/benchmark_latency.py --camera-profile macbook
+
+    # Filter by output mode
+    python tests/manual/benchmark_latency.py --output osc
+    python tests/manual/benchmark_latency.py --output midi
+
+    # Filter by pose model
+    python tests/manual/benchmark_latency.py --pose lite
+
+    # Custom frame count
+    python tests/manual/benchmark_latency.py --frames 500
+
+    # List all combinations without running
+    python tests/manual/benchmark_latency.py --list
+
+Output:
+    logs/latency_raw_YYYYMMDD_HHMMSS.csv     — one row per frame
+    logs/latency_summary_YYYYMMDD_HHMMSS.csv  — aggregate statistics
+    (one pair of files per combination)
+"""
+
+import sys
+import argparse
+import platform
+import statistics
+
+sys.path.insert(0, ".")
+
+import cv2
+from vision_processor.config import Config
+from vision_processor.pose import PoseEstimator
+from vision_processor.features import FeatureExtractor
+from vision_processor.latency_logger import LatencyLogger
+
+
+# =========================================================================
+# COMBINATION MATRIX
+# =========================================================================
+
+def generate_combinations(config: Config,
+                          camera_filter: str = None,
+                          output_filter: str = None,
+                          pose_filter: str = None) -> list[dict]:
+    """
+    Generate all benchmark combinations from config.yaml.
+
+    Each combination is a dict with all the parameters needed to
+    configure and run one benchmark test.
+
+    Args:
+        config: Base Config instance.
+        camera_filter: Only include this camera profile (e.g. "c922").
+        output_filter: Only include this output mode (e.g. "osc", "midi").
+        pose_filter: Only include this pose model (e.g. "lite", "full").
+
+    Returns:
+        List of combination dicts.
+    """
+    cameras = config.camera_profiles
+    resolutions = config.benchmark_resolutions
+    pose_models = config.benchmark_pose_models
+    output_modes = config.benchmark_output_modes
+
+    # Apply filters
+    if camera_filter:
+        cameras = {k: v for k, v in cameras.items() if camera_filter in k}
+    if output_filter:
+        output_modes = [m for m in output_modes if output_filter in m["name"]]
+    if pose_filter:
+        pose_models = [p for p in pose_models if pose_filter in p["name"]]
+
+    combinations = []
+
+    for cam_key, cam_profile in cameras.items():
+        for res in resolutions:
+            for pose in pose_models:
+                for output in output_modes:
+                    name = (
+                        f"{cam_key}_"
+                        f"{res['name']}_"
+                        f"{pose['name']}_"
+                        f"{output['name']}"
+                    )
+
+                    combinations.append({
+                        "name": name,
+                        "camera_profile": cam_key,
+                        "camera_name": cam_profile.get("name", cam_key),
+                        "camera_device_id": cam_profile["device_id"],
+                        "width": res["width"],
+                        "height": res["height"],
+                        "resolution_name": res["name"],
+                        "model_complexity": pose["model_complexity"],
+                        "pose_name": pose["name"],
+                        "output_mode": output["mode"],
+                        "send_mode": output.get("send_mode"),
+                        "output_name": output["name"],
+                    })
+
+    return combinations
+
+
+def print_combination_table(combinations: list):
+    """Print a formatted table of all combinations."""
+    print(f"\n  {'#':<4} {'Name':<32} {'Camera':<18} {'Res':<8} "
+          f"{'Pose':<8} {'Output':<12}")
+    print("  " + "-" * 82)
+
+    for i, c in enumerate(combinations, 1):
+        print(f"  {i:<4} {c['name']:<32} {c['camera_name']:<18} "
+              f"{c['resolution_name']:<8} {c['pose_name']:<8} "
+              f"{c['output_name']:<12}")
+
+
+# =========================================================================
+# BENCHMARK RUNNER
+# =========================================================================
+
+def run_single_benchmark(combo: dict, config: Config,
+                         num_frames: int, warmup_frames: int) -> LatencyLogger:
+    """
+    Run a single benchmark combination.
+
+    Args:
+        combo: Combination dict from generate_combinations().
+        config: Base config (used for OSC/MIDI settings).
+        num_frames: Frames to measure.
+        warmup_frames: Frames to discard before measuring.
+
+    Returns:
+        LatencyLogger with results, or None on failure.
+    """
+    name = combo["name"]
+
+    print(f"\n{'=' * 60}")
+    print(f"  BENCHMARK: {name}")
+    print(f"  {combo['camera_name']} | {combo['resolution_name']} | "
+          f"pose={combo['pose_name']} | output={combo['output_name']}")
+    print(f"{'=' * 60}")
+
+    # --- Build config for this combination ---
+
+    test_config = config.with_overrides(
+        camera__device_id=combo["camera_device_id"],
+        camera__width=combo["width"],
+        camera__height=combo["height"],
+        pose__model_complexity=combo["model_complexity"],
+        output__mode=combo["output_mode"],
+    )
+    if combo["send_mode"]:
+        test_config.set("osc.send_mode", combo["send_mode"])
+
+    # --- Initialize components ---
+
+    print("  Opening camera...")
+    cap = test_config.create_camera()
+    if cap is None:
+        print(f"  ERROR: Could not open camera (device {combo['camera_device_id']}). "
+              f"Skipping.")
+        return None
+
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"  Camera opened: {actual_w}x{actual_h}")
+
+    pose_estimator = test_config.create_pose_estimator()
+    feature_extractor = test_config.create_feature_extractor()
+
+    # For MIDI, only create sender if explicitly requested (needs Surge XT running)
+    sender = None
+    if combo["output_mode"] == "osc":
+        from vision_processor.osc_sender import OSCSender
+        sender = OSCSender(host=test_config.osc_host, port=test_config.osc_port)
+    elif combo["output_mode"] == "midi":
+        try:
+            from vision_processor.midi_sender import MidiSender
+            sender = MidiSender(port_name=test_config.midi_port_name)
+        except Exception as e:
+            print(f"  WARNING: Could not open MIDI port ({e}). "
+                  f"Measuring pipeline without send.")
+
+    # --- Logger ---
+
+    metadata = test_config.to_metadata()
+    metadata["benchmark_name"] = name
+    metadata["machine"] = get_machine_info()
+
+    logger = LatencyLogger(config=metadata, output_dir="logs")
+
+    # --- Warmup ---
+
+    if warmup_frames > 0:
+        print(f"  Warming up ({warmup_frames} frames)...")
+        prev_landmarks = None
+        for _ in range(warmup_frames):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            results = pose_estimator.estimate(frame)
+            landmarks = pose_estimator.get_landmarks(results)
+            if landmarks:
+                feature_extractor.calculate(landmarks, prev_landmarks)
+                prev_landmarks = landmarks
+
+    # --- Measure ---
+
+    print(f"  Measuring ({num_frames} frames)...")
+
+    prev_landmarks = None
+    progress_interval = max(1, num_frames // 10)
+
+    for i in range(num_frames):
+        logger.start_frame()
+
+        # Stage 1: Capture
+        ret, frame = cap.read()
+        logger.mark("capture")
+
+        if not ret:
+            print("  ERROR: Failed to read frame. Stopping.")
+            break
+
+        # Stage 2: Pose estimation
+        results = pose_estimator.estimate(frame)
+        landmarks = pose_estimator.get_landmarks(results)
+        logger.mark("pose")
+
+        # Stage 3: Feature extraction
+        if landmarks:
+            features = feature_extractor.calculate(landmarks, prev_landmarks)
+            prev_landmarks = landmarks
+        else:
+            features = feature_extractor.calculate(None)
+        logger.mark("features")
+
+        # Stage 4: Send
+        if sender and features:
+            test_config.send_features(sender, features)
+        logger.mark("send")
+
+        logger.end_frame(pose_detected=landmarks is not None)
+
+        # Progress
+        if (i + 1) % progress_interval == 0:
+            pct = (i + 1) / num_frames * 100
+            last_ms = logger.get_last_total_ms()
+            print(f"  [{pct:5.1f}%] frame {i + 1}/{num_frames} — {last_ms:.1f}ms")
+
+    # --- Cleanup ---
+
+    pose_estimator.release()
+    cap.release()
+    if sender and combo["output_mode"] == "midi":
+        sender.close()
+
+    # --- Results ---
+
+    logger.print_summary()
+    logger.save()
+
+    return logger
+
+
+def get_machine_info() -> str:
+    """Gather basic machine info."""
+    parts = [
+        platform.node(),
+        platform.machine(),
+        platform.system(),
+        platform.processor() or "unknown CPU",
+    ]
+    return " / ".join(parts)
+
+
+# =========================================================================
+# COMPARISON TABLE
+# =========================================================================
+
+def print_comparison(results: list[tuple[str, LatencyLogger]]):
+    """Print a final comparison table across all runs."""
+    if len(results) < 2:
+        return
+
+    print(f"\n\n{'=' * 78}")
+    print("  COMPARISON ACROSS ALL CONFIGURATIONS")
+    print(f"{'=' * 78}")
+    print(f"\n  {'Config':<32} {'Mean':>8} {'P50':>8} {'P95':>8} "
+          f"{'FPS':>7} {'<80ms':>7}")
+    print("  " + "-" * 72)
+
+    for name, logger in results:
+        valid = [f for f in logger.frames if f.get("pose_detected", True)]
+        totals = [f["total_ms"] for f in valid]
+        fps_vals = [f["fps"] for f in valid if f.get("fps", 0) > 0]
+
+        if not totals:
+            continue
+
+        mean = statistics.mean(totals)
+        p50 = logger._percentile(totals, 50)
+        p95 = logger._percentile(totals, 95)
+        fps_mean = statistics.mean(fps_vals) if fps_vals else 0
+        under_80 = sum(1 for v in totals if v <= 80) / len(totals) * 100
+
+        print(f"  {name:<32} {mean:>7.1f}ms {p50:>7.1f}ms "
+              f"{p95:>7.1f}ms {fps_mean:>6.1f} {under_80:>6.1f}%")
+
+    print(f"\n  All CSV files saved in logs/")
+    print("=" * 78)
+
+
+# =========================================================================
+# MAIN
+# =========================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Cuerpo Sonoro — Pipeline Latency Benchmark"
+    )
+    parser.add_argument(
+        "--frames", type=int, default=None,
+        help="Frames per config (overrides config.yaml)"
+    )
+    parser.add_argument(
+        "--warmup", type=int, default=None,
+        help="Warmup frames (overrides config.yaml)"
+    )
+    parser.add_argument(
+        "--camera-profile", type=str, default=None,
+        help="Only test this camera profile (e.g. 'c922', 'macbook')"
+    )
+    parser.add_argument(
+        "--output", type=str, default=None,
+        help="Only test this output mode (e.g. 'osc', 'midi')"
+    )
+    parser.add_argument(
+        "--pose", type=str, default=None,
+        help="Only test this pose model (e.g. 'lite', 'full', 'heavy')"
+    )
+    parser.add_argument(
+        "--list", action="store_true",
+        help="List all combinations without running"
+    )
+    parser.add_argument(
+        "--config-path", type=str, default=None,
+        help="Path to config.yaml (default: project root)"
+    )
+    args = parser.parse_args()
+
+    # Load config
+    config = Config(path=args.config_path)
+
+    num_frames = args.frames or config.benchmark_frames
+    warmup = args.warmup or config.benchmark_warmup
+
+    # Generate combinations
+    combinations = generate_combinations(
+        config,
+        camera_filter=args.camera_profile,
+        output_filter=args.output,
+        pose_filter=args.pose,
+    )
+
+    if not combinations:
+        print("No combinations match your filters.")
+        sys.exit(1)
+
+    # Header
+    print("=" * 60)
+    print("  CUERPO SONORO — LATENCY BENCHMARK")
+    print("=" * 60)
+    print(f"\n  Machine:     {get_machine_info()}")
+    print(f"  Configs:     {len(combinations)}")
+    print(f"  Frames:      {num_frames} per config (+{warmup} warmup)")
+
+    print_combination_table(combinations)
+
+    if args.list:
+        print(f"\n  Total: {len(combinations)} combinations")
+        sys.exit(0)
+
+    # Confirm
+    total_time_est = len(combinations) * (num_frames + warmup) / 30  # ~30fps
+    print(f"\n  Estimated time: ~{total_time_est:.0f}s "
+          f"({total_time_est / 60:.1f} min)")
+
+    input("\n  Press ENTER to start (stand in front of camera)...")
+
+    # Run all combinations
+    results = []
+    for i, combo in enumerate(combinations, 1):
+        print(f"\n  >>> Running {i}/{len(combinations)}: {combo['name']}")
+
+        logger = run_single_benchmark(
+            combo=combo,
+            config=config,
+            num_frames=num_frames,
+            warmup_frames=warmup,
+        )
+
+        if logger and logger.frame_count > 0:
+            results.append((combo["name"], logger))
+
+        # Pause between camera switches to let USB stabilize
+        if (i < len(combinations) and
+                combo["camera_device_id"] !=
+                combinations[i]["camera_device_id"]):
+            print("\n  Camera switch detected. "
+                  "Pausing 3s for USB to stabilize...")
+            import time
+            time.sleep(3)
+
+    # Final comparison
+    print_comparison(results)
+
+
+if __name__ == "__main__":
+    main()
