@@ -28,6 +28,7 @@ Cuerpo Sonoro captures human body movement through computer vision and translate
 - [Web Demo](#web-demo)
 - [Performance Targets](#performance-targets)
 - [Testing](#testing)
+- [Benchmarks](#benchmarks)
 - [Deployment](#deployment)
 - [Future Work](#future-work)
 - [Academic Context](#academic-context)
@@ -189,7 +190,9 @@ cuerposonoro/
 │   ├── pose.py                 # MediaPipe pose estimation wrapper
 │   ├── features.py             # Motion feature extraction (17 features)
 │   ├── osc_sender.py           # OSC communication to SuperCollider
-│   └── midi_sender.py          # MIDI/MPE communication to Surge XT
+│   ├── midi_sender.py          # MIDI/MPE communication to Surge XT
+│   ├── config.py               # Centralized config loader with factory methods
+│   └── latency_logger.py       # Per-stage latency instrumentation
 ├── audio_engine/               # SuperCollider audio synthesis
 │   └── ...
 ├── supercollider/              # SuperCollider SynthDef files
@@ -207,6 +210,12 @@ cuerposonoro/
 │       ├── manual_midi_sender.py
 │       ├── manual_e2e_osc.py
 │       └── manual_e2e_midi_debug.py
+├── benchmarks/                 # Latency benchmarking system
+│   ├── README.md               # Full documentation with results
+│   ├── run_benchmark.py        # Automated benchmark runner
+│   ├── analyze_results.py      # Analysis with pandas + matplotlib
+│   ├── results/                # Session-organized CSV data
+│   └── charts/                 # Generated charts and screenshots
 ├── logs/                       # Session logs (CSV) for analysis
 ├── main.py                     # Application entry point
 ├── config.yaml                 # Centralized configuration
@@ -323,21 +332,34 @@ python tests/manual/manual_e2e_midi_debug.py  # full pipeline → Surge XT
 ```
 
 Manual E2E tests generate CSV logs in `tests/manual/logs/` with per-frame data for post-hoc analysis.
+
 ---
 
-## Testing
+## Benchmarks
 
-The project includes integration tests that validate the full pipeline from camera capture to audio output.
+The project includes a dedicated benchmarking system for measuring pipeline latency across different hardware and software configurations. This data supports the evaluation chapter of the TFG.
+
+The benchmark runner instruments each pipeline stage with `time.perf_counter()` and tests a matrix of **36 configurations** (2 cameras × 2 resolutions × 3 pose models × 3 output modes), generating per-frame CSV data and publication-quality charts.
+
+**Key results** (MacBook Pro 2020 i7 + Logitech C922, 300 frames per config):
+
+| Pose Model | Mean Latency | FPS | Under 80ms Target |
+|------------|-------------|-----|-------------------|
+| Lite (complexity=0) | 33.7ms | ~30 | 99–100% |
+| Full (complexity=1) | 34.7ms | ~30 | 99–100% |
+| Heavy (complexity=2) | 86.6ms | ~12 | 6–85% |
+
+Pose estimation is the pipeline bottleneck (67% of total time). Lite and Full perform nearly identically, while Heavy exceeds the 80ms target. Camera choice and output protocol (OSC vs MIDI) have negligible impact.
 
 ```bash
-# Run the end-to-end integration test
-python tests/test-integration.py
+# Run benchmarks
+python benchmarks/run_benchmark.py --preview --session-name my-session
 
-# Run the MIDI/MPE end-to-end test with CSV logging
-python tests/test-midi-e2e-debug-log.py
+# Analyze results
+python benchmarks/analyze_results.py --save
 ```
 
-Tests generate CSV logs in `logs/` with per-frame data: timestamp, FPS, pose detection status, all feature values, and trigger events for later analysis.
+For full methodology, results, and charts, see [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 
@@ -403,7 +425,7 @@ This project is open source. See the [LICENSE](LICENSE) file for details.
 ## Author
 
 **Ana María Jurado Crespo**
-- GitHub: [@AmarilloBit](https://github.com/AmarilloBit)
+- Web: [maramotto/cuerposonoro](https://maramotto.com/cuerposonoro.html)
 - Github:  [@maramotto](https://github.com/maramotto)
 - Email: am.juradoc@alumnos.urjc.es
 - University: ETSII, Universidad Rey Juan Carlos
