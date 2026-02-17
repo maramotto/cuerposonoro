@@ -28,6 +28,9 @@ Usage:
     # List all combinations without running
     python tests/manual/benchmark_latency.py --list
 
+    # Show camera preview before each benchmark
+    python tests/manual/benchmark_latency.py --preview
+
 Output:
     logs/latency_raw_YYYYMMDD_HHMMSS.csv     — one row per frame
     logs/latency_summary_YYYYMMDD_HHMMSS.csv  — aggregate statistics
@@ -46,6 +49,69 @@ from vision_processor.config import Config
 from vision_processor.pose import PoseEstimator
 from vision_processor.features import FeatureExtractor
 from vision_processor.latency_logger import LatencyLogger
+
+
+# =========================================================================
+# CAMERA PREVIEW
+# =========================================================================
+
+def run_preview(cap, pose_estimator, combo_name: str, timeout: int = 10):
+    """
+    Show a live camera preview with skeleton overlay.
+
+    Lets the user confirm they're visible and properly positioned
+    before the headless benchmark starts.
+
+    Args:
+        cap: Opened cv2.VideoCapture.
+        pose_estimator: Initialized PoseEstimator.
+        combo_name: Name of the current benchmark (shown on screen).
+        timeout: Auto-close after this many seconds if no key pressed.
+    """
+    import time
+
+    window_name = f"Preview — {combo_name}"
+    print(f"  PREVIEW: Position yourself in front of the camera.")
+    print(f"  Press 'q' or SPACE to start benchmark (auto-starts in {timeout}s)")
+
+    start_time = time.time()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Run pose detection and draw skeleton
+        results = pose_estimator.estimate(frame)
+        frame = pose_estimator.draw_skeleton(frame, results)
+        has_pose = results and results.pose_landmarks
+
+        # Status overlay
+        elapsed = time.time() - start_time
+        remaining = max(0, timeout - int(elapsed))
+
+        status = "POSE OK" if has_pose else "NO POSE — move into frame"
+        color = (0, 255, 0) if has_pose else (0, 0, 255)
+
+        cv2.putText(frame, status, (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+        cv2.putText(frame, f"Starting in {remaining}s (press q/SPACE to start now)",
+                    (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+        cv2.putText(frame, combo_name, (10, frame.shape[0] - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+        cv2.imshow(window_name, frame)
+
+        # Exit on key press or timeout
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord('q'), ord(' '), 27):  # q, space, or ESC
+            break
+        if elapsed >= timeout:
+            break
+
+    cv2.destroyWindow(window_name)
+    # Small delay to let the window actually close before headless run
+    cv2.waitKey(100)
 
 
 # =========================================================================
@@ -132,7 +198,8 @@ def print_combination_table(combinations: list):
 # =========================================================================
 
 def run_single_benchmark(combo: dict, config: Config,
-                         num_frames: int, warmup_frames: int) -> LatencyLogger:
+                         num_frames: int, warmup_frames: int,
+                         preview: bool = False) -> LatencyLogger:
     """
     Run a single benchmark combination.
 
@@ -193,6 +260,11 @@ def run_single_benchmark(combo: dict, config: Config,
         except Exception as e:
             print(f"  WARNING: Could not open MIDI port ({e}). "
                   f"Measuring pipeline without send.")
+
+    # --- Preview (if enabled) ---
+
+    if preview:
+        run_preview(cap, pose_estimator, name)
 
     # --- Logger ---
 
@@ -360,6 +432,10 @@ def main():
         "--config-path", type=str, default=None,
         help="Path to config.yaml (default: project root)"
     )
+    parser.add_argument(
+        "--preview", action="store_true",
+        help="Show camera preview with skeleton before each benchmark"
+    )
     args = parser.parse_args()
 
     # Load config
@@ -399,7 +475,10 @@ def main():
     print(f"\n  Estimated time: ~{total_time_est:.0f}s "
           f"({total_time_est / 60:.1f} min)")
 
-    input("\n  Press ENTER to start (stand in front of camera)...")
+    if not args.preview:
+        input("\n  Press ENTER to start (stand in front of camera)...")
+    else:
+        print(f"\n  Preview mode: a camera window will open before each run.")
 
     # Run all combinations
     results = []
@@ -411,6 +490,7 @@ def main():
             config=config,
             num_frames=num_frames,
             warmup_frames=warmup,
+            preview=args.preview,
         )
 
         if logger and logger.frame_count > 0:
