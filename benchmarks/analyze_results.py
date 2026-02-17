@@ -2,58 +2,111 @@
 """
 Analyze and compare latency benchmark results.
 
-Reads all CSV files from logs/ and generates:
-- Comparison tables
-- Per-stage stacked bar charts
-- Box plots of latency distribution
-- Key findings summary
+Reads CSV files from benchmarks/results/ (scanning all session subdirectories)
+and generates comparison tables, charts, and key findings.
 
 Requires: pip install pandas matplotlib
 
 Usage:
-    python tests/manual/analyze_results.py
+    # Analyze all sessions
+    python benchmarks/analyze_results.py
 
-    # Save charts as PNG instead of showing
-    python tests/manual/analyze_results.py --save
+    # Analyze a specific session
+    python benchmarks/analyze_results.py --session 2026-02-17_c922_full_osc
 
-    # Filter by keyword
-    python tests/manual/analyze_results.py --filter c922
+    # Filter by keyword across all sessions
+    python benchmarks/analyze_results.py --filter c922
+
+    # Save charts as PNG
+    python benchmarks/analyze_results.py --save
 
     # Only console output, no charts
-    python tests/manual/analyze_results.py --no-charts
+    python benchmarks/analyze_results.py --no-charts
+
+    # List available sessions
+    python benchmarks/analyze_results.py --list-sessions
 """
 
 import sys
+import os
 import argparse
 from pathlib import Path
 
-sys.path.insert(0, "../tests/manual")
+sys.path.insert(0, ".")
 
 import pandas as pd
 import numpy as np
+
+# Directories relative to this script
+BENCHMARKS_DIR = Path(__file__).parent
+RESULTS_DIR = BENCHMARKS_DIR / "results"
+CHARTS_DIR = BENCHMARKS_DIR / "charts"
 
 
 # =========================================================================
 # LOAD DATA
 # =========================================================================
 
-def load_all_raw(logs_dir: str, name_filter: str = None) -> pd.DataFrame:
-    """
-    Load all latency_raw CSVs into a single DataFrame with benchmark name.
+def list_sessions() -> list[Path]:
+    """List all session directories that contain CSV results."""
+    if not RESULTS_DIR.exists():
+        return []
 
-    Adds a 'benchmark' column extracted from the matching summary CSV.
+    sessions = []
+    for item in sorted(RESULTS_DIR.iterdir()):
+        if item.is_dir() and list(item.glob("latency_raw_*.csv")):
+            sessions.append(item)
+
+    # Also check for flat CSVs directly in results/ (legacy layout)
+    if list(RESULTS_DIR.glob("latency_raw_*.csv")):
+        sessions.insert(0, RESULTS_DIR)
+
+    return sessions
+
+
+def load_all_raw(session: str = None,
+                 name_filter: str = None) -> pd.DataFrame:
     """
-    logs_path = Path(logs_dir)
-    raw_files = sorted(logs_path.glob("latency_raw_*.csv"))
+    Load all latency_raw CSVs into a single DataFrame.
+
+    Scans subdirectories recursively. Adds 'benchmark', 'session',
+    and config metadata columns.
+
+    Args:
+        session: Only load from this session folder name.
+        name_filter: Filter benchmarks by keyword in name.
+    """
+    if not RESULTS_DIR.exists():
+        print(f"Results directory not found: {RESULTS_DIR}")
+        sys.exit(1)
+
+    # Find all raw CSVs
+    if session:
+        session_path = RESULTS_DIR / session
+        if not session_path.exists():
+            print(f"Session not found: {session_path}")
+            print(f"Available sessions:")
+            for s in list_sessions():
+                print(f"  {s.name}")
+            sys.exit(1)
+        raw_files = sorted(session_path.glob("latency_raw_*.csv"))
+    else:
+        raw_files = sorted(RESULTS_DIR.rglob("latency_raw_*.csv"))
 
     if not raw_files:
-        print(f"No raw CSV files found in {logs_dir}/")
+        print(f"No raw CSV files found in {RESULTS_DIR}/")
         sys.exit(1)
 
     frames = []
     for raw_path in raw_files:
         timestamp = raw_path.stem.replace("latency_raw_", "")
-        summary_path = logs_path / f"latency_summary_{timestamp}.csv"
+        summary_path = raw_path.parent / f"latency_summary_{timestamp}.csv"
+
+        # Determine session name from parent directory
+        if raw_path.parent == RESULTS_DIR:
+            session_name = "(flat)"
+        else:
+            session_name = raw_path.parent.name
 
         # Extract benchmark name and config from summary
         meta = {}
@@ -74,6 +127,7 @@ def load_all_raw(logs_dir: str, name_filter: str = None) -> pd.DataFrame:
         # Load raw data
         df = pd.read_csv(raw_path)
         df["benchmark"] = benchmark_name
+        df["session"] = session_name
         df["timestamp"] = timestamp
 
         # Add metadata columns for grouping
@@ -103,12 +157,10 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 
     Returns one row per benchmark with stats for each stage.
     """
-    # Only use frames where pose was detected
     valid = df[df["pose_detected"] == True].copy()
 
     stage_cols = [c for c in valid.columns if c.endswith("_ms")]
 
-    # Aggregate per benchmark
     def agg_stats(group):
         stats = {}
         for col in stage_cols:
@@ -132,6 +184,7 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
         stats["resolution"] = group["resolution"].iloc[0]
         stats["pose_model"] = group["pose_model"].iloc[0]
         stats["output_mode"] = group["output_mode"].iloc[0]
+        stats["session"] = group["session"].iloc[0]
 
         return pd.Series(stats)
 
@@ -147,27 +200,35 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 def print_comparison(summary: pd.DataFrame):
     """Print the main comparison table."""
-    print(f"\n{'=' * 100}")
+    print(f"\n{'=' * 110}")
     print("  BENCHMARK COMPARISON (sorted by mean latency)")
-    print(f"{'=' * 100}\n")
+    print(f"{'=' * 110}\n")
 
-    print(f"  {'Name':<32} {'Camera':<14} {'Res':<10} {'Pose':<6} "
-          f"{'Out':<6} {'Mean':>8} {'P50':>8} {'P95':>8} "
-          f"{'FPS':>6} {'<80ms':>7} {'Det':>5}")
-    print("  " + "-" * 96)
+    show_session = summary["session"].nunique() > 1
+
+    header = (f"  {'Name':<32} {'Camera':<14} {'Res':<10} {'Pose':<6} "
+              f"{'Out':<6} {'Mean':>8} {'P50':>8} {'P95':>8} "
+              f"{'FPS':>6} {'<80ms':>7} {'Det':>5}")
+    if show_session:
+        header += f" {'Session':<24}"
+    print(header)
+    print("  " + "-" * (106 if show_session else 96))
 
     pose_labels = {"0": "Lite", "1": "Full", "2": "Heavy"}
 
     for name, row in summary.iterrows():
         pose = pose_labels.get(str(row["pose_model"]), str(row["pose_model"]))
-        print(f"  {name:<32} {row['camera']:<14} {row['resolution']:<10} "
-              f"{pose:<6} {row['output_mode']:<6} "
-              f"{row['total_ms_mean']:>7.1f}ms "
-              f"{row['total_ms_p50']:>7.1f}ms "
-              f"{row['total_ms_p95']:>7.1f}ms "
-              f"{row['fps_mean']:>5.1f} "
-              f"{row['pct_under_80ms']:>6.1f}% "
-              f"{row['detection_pct']:>4.0f}%")
+        line = (f"  {name:<32} {row['camera']:<14} {row['resolution']:<10} "
+                f"{pose:<6} {row['output_mode']:<6} "
+                f"{row['total_ms_mean']:>7.1f}ms "
+                f"{row['total_ms_p50']:>7.1f}ms "
+                f"{row['total_ms_p95']:>7.1f}ms "
+                f"{row['fps_mean']:>5.1f} "
+                f"{row['pct_under_80ms']:>6.1f}% "
+                f"{row['detection_pct']:>4.0f}%")
+        if show_session:
+            line += f" {row['session']:<24}"
+        print(line)
     print()
 
 
@@ -206,7 +267,7 @@ def print_stage_breakdown(summary: pd.DataFrame):
 
 
 def print_findings(df: pd.DataFrame, summary: pd.DataFrame):
-    """Print automated key findings from the data."""
+    """Print automated key findings."""
     print(f"{'=' * 65}")
     print("  KEY FINDINGS")
     print(f"{'=' * 65}\n")
@@ -268,11 +329,13 @@ def print_findings(df: pd.DataFrame, summary: pd.DataFrame):
 
     # Bottleneck analysis
     stages = ["capture_ms", "pose_ms", "features_ms", "send_ms"]
-    stage_means = valid[stages].mean()
-    total = stage_means.sum()
-    bottleneck = stage_means.idxmax().replace("_ms", "")
-    pct = stage_means.max() / total * 100
-    print(f"  Bottleneck: {bottleneck} ({pct:.0f}% of pipeline time)\n")
+    available = [s for s in stages if s in valid.columns]
+    if available:
+        stage_means = valid[available].mean()
+        total = stage_means.sum()
+        bottleneck = stage_means.idxmax().replace("_ms", "")
+        pct = stage_means.max() / total * 100
+        print(f"  Bottleneck: {bottleneck} ({pct:.0f}% of pipeline time)\n")
 
 
 # =========================================================================
@@ -280,7 +343,7 @@ def print_findings(df: pd.DataFrame, summary: pd.DataFrame):
 # =========================================================================
 
 def generate_charts(df: pd.DataFrame, summary: pd.DataFrame,
-                    save: bool = False, output_dir: str = "logs"):
+                    save: bool = False):
     """Generate publication-quality charts for the TFG."""
     try:
         import matplotlib.pyplot as plt
@@ -301,6 +364,9 @@ def generate_charts(df: pd.DataFrame, summary: pd.DataFrame,
         "send": "#C44E52",
     }
     stages = ["capture", "pose", "features", "send"]
+
+    if save:
+        CHARTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # --- Chart 1: Stacked bar (per-stage mean) ---
 
@@ -324,7 +390,7 @@ def generate_charts(df: pd.DataFrame, summary: pd.DataFrame,
     plt.tight_layout()
 
     if save:
-        path = f"{output_dir}/chart_stages.png"
+        path = CHARTS_DIR / "chart_stages.png"
         plt.savefig(path, dpi=150)
         print(f"  Saved: {path}")
         plt.close()
@@ -357,7 +423,7 @@ def generate_charts(df: pd.DataFrame, summary: pd.DataFrame,
     plt.tight_layout()
 
     if save:
-        path = f"{output_dir}/chart_boxplot.png"
+        path = CHARTS_DIR / "chart_boxplot.png"
         plt.savefig(path, dpi=150)
         print(f"  Saved: {path}")
         plt.close()
@@ -398,7 +464,7 @@ def generate_charts(df: pd.DataFrame, summary: pd.DataFrame,
         plt.tight_layout()
 
         if save:
-            path = f"{output_dir}/chart_pose_comparison.png"
+            path = CHARTS_DIR / "chart_pose_comparison.png"
             plt.savefig(path, dpi=150)
             print(f"  Saved: {path}")
             plt.close()
@@ -415,28 +481,48 @@ def main():
         description="Analyze Cuerpo Sonoro benchmark results"
     )
     parser.add_argument(
-        "--logs-dir", type=str, default="logs",
-        help="Directory with benchmark CSVs (default: logs)"
-    )
-    parser.add_argument(
-        "--save", action="store_true",
-        help="Save charts as PNG instead of displaying"
+        "--session", type=str, default=None,
+        help="Analyze only this session folder (e.g. '2026-02-17_c922_full_osc')"
     )
     parser.add_argument(
         "--filter", type=str, default=None,
         help="Filter benchmarks by keyword (e.g. 'c922', 'full')"
     )
     parser.add_argument(
+        "--save", action="store_true",
+        help="Save charts as PNG to benchmarks/charts/"
+    )
+    parser.add_argument(
         "--no-charts", action="store_true",
         help="Skip chart generation"
     )
+    parser.add_argument(
+        "--list-sessions", action="store_true",
+        help="List available sessions and exit"
+    )
     args = parser.parse_args()
 
-    # Load all raw data into one DataFrame
-    df = load_all_raw(args.logs_dir, name_filter=args.filter)
+    # List sessions mode
+    if args.list_sessions:
+        sessions = list_sessions()
+        if not sessions:
+            print("No sessions found.")
+        else:
+            print(f"\n  Available sessions in {RESULTS_DIR}:\n")
+            for s in sessions:
+                n_raw = len(list(s.glob("latency_raw_*.csv")))
+                label = "(flat — legacy)" if s == RESULTS_DIR else s.name
+                print(f"    {label}  ({n_raw} benchmarks)")
+        print()
+        sys.exit(0)
 
+    # Load data
+    df = load_all_raw(session=args.session, name_filter=args.filter)
+
+    sessions_loaded = df["session"].nunique()
     print(f"\n  Loaded {len(df)} frames from "
-          f"{df['benchmark'].nunique()} benchmarks.\n")
+          f"{df['benchmark'].nunique()} benchmarks "
+          f"across {sessions_loaded} session(s).\n")
 
     # Build summary
     summary = build_summary(df)
@@ -448,7 +534,7 @@ def main():
 
     # Charts
     if not args.no_charts:
-        generate_charts(df, summary, save=args.save, output_dir=args.logs_dir)
+        generate_charts(df, summary, save=args.save)
 
 
 if __name__ == "__main__":
