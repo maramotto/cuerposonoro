@@ -9,27 +9,27 @@ Runs WITHOUT OpenCV display to avoid contaminating measurements.
 
 Usage:
     # Run all combinations for all cameras
-    python tests/manual/benchmark_latency.py
+    python tests/manual/run_benchmark.py
 
     # Run only a specific camera
-    python tests/manual/benchmark_latency.py --camera-profile c922
-    python tests/manual/benchmark_latency.py --camera-profile macbook
+    python tests/manual/run_benchmark.py --camera-profile c922
+    python tests/manual/run_benchmark.py --camera-profile macbook
 
     # Filter by output mode
-    python tests/manual/benchmark_latency.py --output osc
-    python tests/manual/benchmark_latency.py --output midi
+    python tests/manual/run_benchmark.py --output osc
+    python tests/manual/run_benchmark.py --output midi
 
     # Filter by pose model
-    python tests/manual/benchmark_latency.py --pose lite
+    python tests/manual/run_benchmark.py --pose lite
 
     # Custom frame count
-    python tests/manual/benchmark_latency.py --frames 500
+    python tests/manual/run_benchmark.py --frames 500
 
     # List all combinations without running
-    python tests/manual/benchmark_latency.py --list
+    python tests/manual/run_benchmark.py --list
 
     # Show camera preview before each benchmark
-    python tests/manual/benchmark_latency.py --preview
+    python tests/manual/run_benchmark.py --preview
 
 Output:
     logs/latency_raw_YYYYMMDD_HHMMSS.csv     — one row per frame
@@ -42,7 +42,7 @@ import argparse
 import platform
 import statistics
 
-sys.path.insert(0, ".")
+sys.path.insert(0, "../tests/manual")
 
 import cv2
 from vision_processor.config import Config
@@ -272,7 +272,7 @@ def run_single_benchmark(combo: dict, config: Config,
     metadata["benchmark_name"] = name
     metadata["machine"] = get_machine_info()
 
-    logger = LatencyLogger(config=metadata, output_dir="logs")
+    logger = LatencyLogger(config=metadata, output_dir="../tests/manual/logs")
 
     # --- Warmup ---
 
