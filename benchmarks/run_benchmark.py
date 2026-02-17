@@ -8,47 +8,106 @@ output mode from config.yaml, and measures per-stage latency for each.
 Runs WITHOUT OpenCV display to avoid contaminating measurements.
 
 Usage:
-    # Run all combinations for all cameras
-    python tests/manual/run_benchmark.py
+    # Run all combinations
+    python benchmarks/run_benchmark.py
 
     # Run only a specific camera
-    python tests/manual/run_benchmark.py --camera-profile c922
-    python tests/manual/run_benchmark.py --camera-profile macbook
+    python benchmarks/run_benchmark.py --camera-profile c922
 
-    # Filter by output mode
-    python tests/manual/run_benchmark.py --output osc
-    python tests/manual/run_benchmark.py --output midi
+    # Filter by output mode or pose model
+    python benchmarks/run_benchmark.py --output osc --pose full
 
-    # Filter by pose model
-    python tests/manual/run_benchmark.py --pose lite
+    # Custom session name
+    python benchmarks/run_benchmark.py --session-name "pre-defense-final"
 
     # Custom frame count
-    python tests/manual/run_benchmark.py --frames 500
+    python benchmarks/run_benchmark.py --frames 500
 
     # List all combinations without running
-    python tests/manual/run_benchmark.py --list
+    python benchmarks/run_benchmark.py --list
 
     # Show camera preview before each benchmark
-    python tests/manual/run_benchmark.py --preview
+    python benchmarks/run_benchmark.py --preview
 
 Output:
-    logs/latency_raw_YYYYMMDD_HHMMSS.csv     — one row per frame
-    logs/latency_summary_YYYYMMDD_HHMMSS.csv  — aggregate statistics
-    (one pair of files per combination)
+    benchmarks/results/<session>/latency_raw_*.csv
+    benchmarks/results/<session>/latency_summary_*.csv
+
+    Session folder names are auto-generated from filters and date, e.g.:
+        2026-02-17_c922_full_osc
+        2026-02-17_all
+        2026-02-17_pre-defense-final   (with --session-name)
 """
 
 import sys
+import os
 import argparse
 import platform
 import statistics
+from datetime import datetime
 
-sys.path.insert(0, "../tests/manual")
+sys.path.insert(0, ".")
 
 import cv2
 from vision_processor.config import Config
 from vision_processor.pose import PoseEstimator
 from vision_processor.features import FeatureExtractor
 from vision_processor.latency_logger import LatencyLogger
+
+# Base directory for all benchmark results
+RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
+
+
+# =========================================================================
+# SESSION NAMING
+# =========================================================================
+
+def build_session_name(camera_filter: str = None,
+                       output_filter: str = None,
+                       pose_filter: str = None,
+                       custom_name: str = None) -> str:
+    """
+    Generate a descriptive session folder name.
+
+    Examples:
+        No filters:                  2026-02-17_all
+        --camera-profile c922:       2026-02-17_c922
+        --pose full --output osc:    2026-02-17_full_osc
+        --session-name baseline:     2026-02-17_baseline
+    """
+    date = datetime.now().strftime("%Y-%m-%d")
+
+    if custom_name:
+        return f"{date}_{custom_name}"
+
+    parts = []
+    if camera_filter:
+        parts.append(camera_filter)
+    if pose_filter:
+        parts.append(pose_filter)
+    if output_filter:
+        parts.append(output_filter)
+
+    suffix = "_".join(parts) if parts else "all"
+    return f"{date}_{suffix}"
+
+
+def ensure_unique_session(base_path: str) -> str:
+    """
+    If the session folder already exists, append a counter.
+
+    benchmarks/results/2026-02-17_all
+    benchmarks/results/2026-02-17_all_2
+    benchmarks/results/2026-02-17_all_3
+    """
+    if not os.path.exists(base_path):
+        return base_path
+
+    counter = 2
+    while os.path.exists(f"{base_path}_{counter}"):
+        counter += 1
+
+    return f"{base_path}_{counter}"
 
 
 # =========================================================================
@@ -127,15 +186,6 @@ def generate_combinations(config: Config,
 
     Each combination is a dict with all the parameters needed to
     configure and run one benchmark test.
-
-    Args:
-        config: Base Config instance.
-        camera_filter: Only include this camera profile (e.g. "c922").
-        output_filter: Only include this output mode (e.g. "osc", "midi").
-        pose_filter: Only include this pose model (e.g. "lite", "full").
-
-    Returns:
-        List of combination dicts.
     """
     cameras = config.camera_profiles
     resolutions = config.benchmark_resolutions
@@ -199,6 +249,7 @@ def print_combination_table(combinations: list):
 
 def run_single_benchmark(combo: dict, config: Config,
                          num_frames: int, warmup_frames: int,
+                         session_dir: str,
                          preview: bool = False) -> LatencyLogger:
     """
     Run a single benchmark combination.
@@ -208,6 +259,8 @@ def run_single_benchmark(combo: dict, config: Config,
         config: Base config (used for OSC/MIDI settings).
         num_frames: Frames to measure.
         warmup_frames: Frames to discard before measuring.
+        session_dir: Directory to save CSV results.
+        preview: Show camera preview before measuring.
 
     Returns:
         LatencyLogger with results, or None on failure.
@@ -247,21 +300,9 @@ def run_single_benchmark(combo: dict, config: Config,
 
     pose_estimator = test_config.create_pose_estimator()
     feature_extractor = test_config.create_feature_extractor()
+    sender = test_config.create_sender()
 
-    # For MIDI, only create sender if explicitly requested (needs Surge XT running)
-    sender = None
-    if combo["output_mode"] == "osc":
-        from vision_processor.osc_sender import OSCSender
-        sender = OSCSender(host=test_config.osc_host, port=test_config.osc_port)
-    elif combo["output_mode"] == "midi":
-        try:
-            from vision_processor.midi_sender import MidiSender
-            sender = MidiSender(port_name=test_config.midi_port_name)
-        except Exception as e:
-            print(f"  WARNING: Could not open MIDI port ({e}). "
-                  f"Measuring pipeline without send.")
-
-    # --- Preview (if enabled) ---
+    # --- Preview ---
 
     if preview:
         run_preview(cap, pose_estimator, name)
@@ -272,7 +313,7 @@ def run_single_benchmark(combo: dict, config: Config,
     metadata["benchmark_name"] = name
     metadata["machine"] = get_machine_info()
 
-    logger = LatencyLogger(config=metadata, output_dir="../tests/manual/logs")
+    logger = LatencyLogger(config=metadata, output_dir=session_dir)
 
     # --- Warmup ---
 
@@ -363,7 +404,8 @@ def get_machine_info() -> str:
 # COMPARISON TABLE
 # =========================================================================
 
-def print_comparison(results: list[tuple[str, LatencyLogger]]):
+def print_comparison(results: list[tuple[str, LatencyLogger]],
+                     session_dir: str):
     """Print a final comparison table across all runs."""
     if len(results) < 2:
         return
@@ -392,7 +434,7 @@ def print_comparison(results: list[tuple[str, LatencyLogger]]):
         print(f"  {name:<32} {mean:>7.1f}ms {p50:>7.1f}ms "
               f"{p95:>7.1f}ms {fps_mean:>6.1f} {under_80:>6.1f}%")
 
-    print(f"\n  All CSV files saved in logs/")
+    print(f"\n  Results saved in: {session_dir}")
     print("=" * 78)
 
 
@@ -436,6 +478,10 @@ def main():
         "--preview", action="store_true",
         help="Show camera preview with skeleton before each benchmark"
     )
+    parser.add_argument(
+        "--session-name", type=str, default=None,
+        help="Custom session name (e.g. 'pre-defense', 'baseline')"
+    )
     args = parser.parse_args()
 
     # Load config
@@ -456,6 +502,15 @@ def main():
         print("No combinations match your filters.")
         sys.exit(1)
 
+    # Build session directory
+    session_name = build_session_name(
+        camera_filter=args.camera_profile,
+        output_filter=args.output,
+        pose_filter=args.pose,
+        custom_name=args.session_name,
+    )
+    session_dir = ensure_unique_session(os.path.join(RESULTS_DIR, session_name))
+
     # Header
     print("=" * 60)
     print("  CUERPO SONORO — LATENCY BENCHMARK")
@@ -463,12 +518,17 @@ def main():
     print(f"\n  Machine:     {get_machine_info()}")
     print(f"  Configs:     {len(combinations)}")
     print(f"  Frames:      {num_frames} per config (+{warmup} warmup)")
+    print(f"  Session:     {session_name}")
+    print(f"  Output dir:  {session_dir}")
 
     print_combination_table(combinations)
 
     if args.list:
         print(f"\n  Total: {len(combinations)} combinations")
         sys.exit(0)
+
+    # Create session directory
+    os.makedirs(session_dir, exist_ok=True)
 
     # Confirm
     total_time_est = len(combinations) * (num_frames + warmup) / 30  # ~30fps
@@ -490,6 +550,7 @@ def main():
             config=config,
             num_frames=num_frames,
             warmup_frames=warmup,
+            session_dir=session_dir,
             preview=args.preview,
         )
 
@@ -506,7 +567,7 @@ def main():
             time.sleep(3)
 
     # Final comparison
-    print_comparison(results)
+    print_comparison(results, session_dir)
 
 
 if __name__ == "__main__":
