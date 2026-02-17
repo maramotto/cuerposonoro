@@ -425,6 +425,7 @@ This project is open source. See the [LICENSE](LICENSE) file for details.
 ## Author
 
 **Ana María Jurado Crespo**
+
 - Web: [maramotto/cuerposonoro](https://maramotto.com/cuerposonoro.html)
 - Github:  [@maramotto](https://github.com/maramotto)
 - Email: am.juradoc@alumnos.urjc.es
