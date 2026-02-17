@@ -22,12 +22,11 @@ camera:
 # Named camera profiles (used by benchmark to iterate over cameras)
 camera_profiles:
   macbook:
-    device_id: 0
+    device_id: 1
     name: "MacBook Pro Built-in"
   c922:
-    device_id: 1
+    device_id: 0
     name: "Logitech C922"
-
 
 # Pose Estimation
 
@@ -104,7 +103,7 @@ audio:
 
 
 # Benchmark
-# Configuration for benchmark_latency.py
+# Configuration for run_benchmark.py
 # These define which combinations to test.
 
 benchmark:
