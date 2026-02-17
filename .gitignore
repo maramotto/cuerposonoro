@@ -1,2 +1,7 @@
 .idea
 venv
+# Benchmark data (generated, not tracked)
+benchmarks/results/*/
+benchmarks/charts/*.png
+!benchmarks/results/.gitkeep
+!benchmarks/charts/.gitkeep
