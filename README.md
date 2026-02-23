@@ -39,7 +39,7 @@ Cuerpo Sonoro captures human body movement through computer vision and translate
 
 ## Overview
 
-Cuerpo Sonoro explores how the human body can become a musical instrument. A camera captures the performer's movements, MediaPipe estimates body pose in real time, and a set of algorithms extract meaningful motion features. These features are then mapped to musical parameters and sent via OSC to SuperCollider for audio synthesis, or via MIDI/MPE to external synthesizers like Surge XT.
+Cuerpo Sonoro explores how the human body can become a musical instrument. A camera captures the performer's movements, MediaPipe estimates body pose in real time, and a set of algorithms extract meaningful motion features. These features are then mapped to musical parameters and sent via OSC to SuperCollider for audio synthesis, or via MIDI/MPE to external synthesizers like Surge XT. Two MIDI modes are available: **classic** (hand position selects note, jerk triggers it) and **musical** (tempo-quantized melody navigating chord tones based on movement direction).
 
 The system supports two modes of operation:
 
@@ -190,7 +190,11 @@ cuerposonoro/
 │   ├── pose.py                 # MediaPipe pose estimation wrapper
 │   ├── features.py             # Motion feature extraction (17 features)
 │   ├── osc_sender.py           # OSC communication to SuperCollider
-│   ├── midi_sender.py          # MIDI/MPE communication to Surge XT
+│   ├── midi/                   # MIDI sender strategy pattern
+│   │   ├── base.py             # BaseMidiSender abstract interface
+│   │   ├── classic.py          # Classic mode: hand Y position → note, jerk triggers
+│   │   └── musical.py          # Musical mode: tempo-quantized, chord-tone navigation
+│   ├── midi_sender.py          # Backward-compatible alias → ClassicMidiSender
 │   ├── config.py               # Centralized config loader with factory methods
 │   └── latency_logger.py       # Per-stage latency instrumentation
 ├── audio_engine/               # SuperCollider audio synthesis
@@ -291,6 +295,7 @@ python main.py --mode midi
 | `--source PATH` | Use a video file instead of webcam (loops automatically) |
 | `--debug` | Show feature values and active MIDI notes as an on-screen overlay |
 | `--mode osc\|midi` | Override `output.mode` from `config.yaml` at runtime |
+| `--midi-mode classic\|musical` | Override `output.midi_mode` from `config.yaml` at runtime |
 
 **Examples:**
 
@@ -301,8 +306,11 @@ python main.py --debug
 # Validate feature mappings with a pre-recorded video
 python main.py --source tests/videos/my_session.mp4 --debug
 
-# Force MIDI mode regardless of config.yaml
+# MIDI classic mode (hand position → note, jerk triggers)
 python main.py --mode midi --debug
+
+# MIDI musical mode (tempo-quantized, chord-tone melody)
+python main.py --mode midi --midi-mode musical --debug
 ```
 
 The video file mode loops automatically, making it easy to tweak parameters in `config.yaml` and re-run against the same input without needing a live performer.
@@ -408,16 +416,6 @@ docker compose up -d --build
 ```
 
 SSL certificates are managed with Certbot and automatically renewed.
-
----
-
-## Future Work
-
-- **Phase 2 — Depth sensing:** Integrate Intel RealSense D435 for 3D pose analysis. The camera abstraction layer (`capture.py`) is designed for this — adding `RealSenseCamera` requires only a new `BaseCamera` subclass and a config change.
-- **Visual validation videos:** Record short movement sessions with `--source` and `--debug` to build a reference library for systematic feature tuning.
-- **Phase 3 — Visual projection:** Add real-time visual feedback using TouchDesigner or a Python-based solution, synchronized with audio output.
-- **Mobile optimization:** Improve the web demo experience on mobile browsers.
-- **Extended musical mappings:** Explore more complex harmonic and timbral mappings.
 
 ---
 
