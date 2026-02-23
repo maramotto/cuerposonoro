@@ -240,25 +240,33 @@ class Config:
     # Factory methods — create pipeline components from config
     # =========================================================================
 
-    def create_camera(self):
+    def create_camera(self, source: str | None = None):
         """
-        Create and configure an OpenCV VideoCapture from config.
+        Create a camera from config.
+
+        Args:
+            source: Optional video file path (e.g. "tests/videos/test.mp4").
+                    If None, opens the live webcam defined in config.yaml.
+                    If a file path is given, opens VideoFileCamera in loop mode.
 
         Returns:
-            cv2.VideoCapture (opened and configured), or None on failure.
+            WebcamCamera or VideoFileCamera instance.
+
+        Raises:
+            RuntimeError: If the camera or file cannot be opened.
         """
-        import cv2
+        from vision_processor.capture import WebcamCamera, VideoFileCamera
 
-        cap = cv2.VideoCapture(self.camera_device_id)
-        if not cap.isOpened():
-            return None
+        if source is not None:
+            return VideoFileCamera(path=source, loop=True)
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
-        cap.set(cv2.CAP_PROP_FPS, self.camera_fps)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, self.camera_buffer_size)
-
-        return cap
+        return WebcamCamera(
+            device_id=self.camera_device_id,
+            width=self.camera_width,
+            height=self.camera_height,
+            fps=self.camera_fps,
+            buffer_size=self.camera_buffer_size,
+        )
 
     def create_pose_estimator(self):
         """Create a PoseEstimator from config."""
