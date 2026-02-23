@@ -86,7 +86,7 @@ The system follows a merged 2-service Docker architecture, chosen over a 3-servi
 └─────────────────────────────────────────┘
 ```
 
-The vision processor uses a **camera abstraction layer**, making it trivial to switch between different camera hardware (e.g., webcam, Intel RealSense D435) with a single configuration change.
+The vision processor uses a **camera abstraction layer** (`capture.py`), implemented as an abstract base class (`BaseCamera`) with two concrete implementations: `WebcamCamera` for live input and `VideoFileCamera` for pre-recorded sessions. Switching between sources requires no changes to the pipeline — only the `--source` flag or `config.yaml`.
 
 ---
 
@@ -277,9 +277,35 @@ python main.py
 
 1. Open Surge XT in standalone mode.
 2. Enable MIDI input from "Cuerpo Sonoro" virtual port.
-3. Run the vision processor with MIDI output enabled.
+3. Run with MIDI output:
 
-The system will open a camera window with a skeleton overlay for real-time debugging.
+```bash
+python main.py --mode midi
+```
+
+**CLI flags:**
+
+| Flag | Description |
+|------|-------------|
+| *(none)* | Live webcam, output mode from `config.yaml` |
+| `--source PATH` | Use a video file instead of webcam (loops automatically) |
+| `--debug` | Show feature values and active MIDI notes as an on-screen overlay |
+| `--mode osc\|midi` | Override `output.mode` from `config.yaml` at runtime |
+
+**Examples:**
+
+```bash
+# Live performance with debug overlay
+python main.py --debug
+
+# Validate feature mappings with a pre-recorded video
+python main.py --source tests/videos/my_session.mp4 --debug
+
+# Force MIDI mode regardless of config.yaml
+python main.py --mode midi --debug
+```
+
+The video file mode loops automatically, making it easy to tweak parameters in `config.yaml` and re-run against the same input without needing a live performer.
 
 ---
 
@@ -387,7 +413,8 @@ SSL certificates are managed with Certbot and automatically renewed.
 
 ## Future Work
 
-- **Phase 2 — Depth sensing:** Integrate Intel RealSense D435 for 3D pose analysis, enabled by the existing camera abstraction layer.
+- **Phase 2 — Depth sensing:** Integrate Intel RealSense D435 for 3D pose analysis. The camera abstraction layer (`capture.py`) is designed for this — adding `RealSenseCamera` requires only a new `BaseCamera` subclass and a config change.
+- **Visual validation videos:** Record short movement sessions with `--source` and `--debug` to build a reference library for systematic feature tuning.
 - **Phase 3 — Visual projection:** Add real-time visual feedback using TouchDesigner or a Python-based solution, synchronized with audio output.
 - **Mobile optimization:** Improve the web demo experience on mobile browsers.
 - **Extended musical mappings:** Explore more complex harmonic and timbral mappings.
@@ -424,7 +451,7 @@ This project is open source. See the [LICENSE](LICENSE) file for details.
 
 ## Author
 
-**Ana María Jurado Crespo**
+**Ana María J Crespo**
 
 - Web: [maramotto/cuerposonoro](https://maramotto.com/cuerposonoro.html)
 - Github:  [@maramotto](https://github.com/maramotto)
