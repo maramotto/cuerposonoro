@@ -194,11 +194,40 @@ class Config:
     # MIDI
     @property
     def midi_port_name(self) -> str:
-        return self.get("midi.port_name", "Cuerpo Sonoro")
+        return self.get("midi.port_name", "CuerpoSonoro")
 
     @property
     def midi_jerk_threshold(self) -> float:
         return self.get("midi.jerk_threshold", 0.4)
+
+    @property
+    def midi_mode(self) -> str:
+        return self.get("output.midi_mode", "classic")
+
+    # Musical sender settings
+    @property
+    def musical_tempo_bpm(self) -> int:
+        return self.get("musical.tempo_bpm", 120)
+
+    @property
+    def musical_note_subdivision(self) -> int:
+        return self.get("musical.note_subdivision", 8)
+
+    @property
+    def musical_direction_threshold(self) -> float:
+        return self.get("musical.direction_threshold", 0.03)
+
+    @property
+    def musical_velocity_threshold(self) -> float:
+        return self.get("musical.velocity_threshold", 0.4)
+
+    @property
+    def musical_jump_size_slow(self) -> int:
+        return self.get("musical.jump_size_slow", 1)
+
+    @property
+    def musical_jump_size_fast(self) -> int:
+        return self.get("musical.jump_size_fast", 2)
 
     # Camera profiles
     @property
@@ -288,10 +317,10 @@ class Config:
 
     def create_sender(self):
         """
-        Create the appropriate sender (OSC or MIDI) based on output.mode.
+        Create the appropriate sender based on output.mode and output.midi_mode.
 
         Returns:
-            OSCSender or MidiSender instance.
+            OSCSender, ClassicMidiSender, or MusicalMidiSender instance.
         """
         mode = self.output_mode
 
@@ -300,10 +329,25 @@ class Config:
             return OSCSender(host=self.osc_host, port=self.osc_port)
 
         elif mode == "midi":
-            from vision_processor.midi_sender import MidiSender
-            sender = MidiSender(port_name=self.midi_port_name)
-            sender.JERK_THRESHOLD = self.midi_jerk_threshold
-            return sender
+            midi_mode = self.midi_mode
+
+            if midi_mode == "musical":
+                from vision_processor.midi.musical import MusicalMidiSender
+                return MusicalMidiSender(
+                    port_name=self.midi_port_name,
+                    tempo_bpm=self.musical_tempo_bpm,
+                    note_subdivision=self.musical_note_subdivision,
+                    direction_threshold=self.musical_direction_threshold,
+                    velocity_threshold=self.musical_velocity_threshold,
+                    jump_size_slow=self.musical_jump_size_slow,
+                    jump_size_fast=self.musical_jump_size_fast,
+                )
+            else:
+                # classic (default)
+                from vision_processor.midi.classic import ClassicMidiSender
+                sender = ClassicMidiSender(port_name=self.midi_port_name)
+                sender.JERK_THRESHOLD = self.midi_jerk_threshold
+                return sender
 
         else:
             raise ValueError(f"Unknown output mode: {mode}")
