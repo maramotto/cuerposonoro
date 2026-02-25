@@ -146,6 +146,14 @@ def _parse_args():
         default=None,
         help="Override output.mode from config.yaml.",
     )
+    parser.add_argument(
+        "--midi-mode",
+        type=str,
+        choices=["classic", "musical"],
+        default=None,
+        dest="midi_mode",
+        help="Override output.midi_mode from config.yaml (only used when --mode midi).",
+    )
     return parser.parse_args()
 
 
@@ -160,6 +168,8 @@ def main():
     overrides = {}
     if args.mode:
         overrides["output.mode"] = args.mode
+    if args.midi_mode:
+        overrides["output.midi_mode"] = args.midi_mode
 
     config = Config(overrides=overrides if overrides else None)
     print(f"[main] Config: {config.describe()}")
