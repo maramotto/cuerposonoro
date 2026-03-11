@@ -154,7 +154,7 @@ class TestMidiSender:
     @pytest.fixture
     def sender(self):
         """MidiSender with mocked MIDI port."""
-        with patch("vision_processor.midi_sender.mido.open_output") as mock_open:
+        with patch("vision_processor.midi.classic.mido.open_output") as mock_open:
             mock_port = MagicMock()
             mock_open.return_value = mock_port
             from vision_processor.midi_sender import MidiSender
@@ -527,7 +527,7 @@ class TestPipelineMIDI:
 
     @pytest.fixture
     def pipeline(self):
-        with patch("vision_processor.midi_sender.mido.open_output") as mock_open:
+        with patch("vision_processor.midi.classic.mido.open_output") as mock_open:
             mock_port = MagicMock()
             mock_open.return_value = mock_port
             from vision_processor.midi_sender import MidiSender

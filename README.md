@@ -25,6 +25,11 @@ Cuerpo Sonoro captures human body movement through computer vision and translate
   - [Prerequisites](#prerequisites)
   - [Local Installation](#local-installation)
   - [Running the System](#running-the-system)
+- [Installation](#installation)
+  - [macOS](#macos)
+  - [Linux (Ubuntu / Debian)](#linux-ubuntu--debian)
+  - [Running modes](#running-modes)
+  - [Running tests (no hardware required)](#running-tests-no-hardware-required)
 - [Web Demo](#web-demo)
 - [Performance Targets](#performance-targets)
 - [Testing](#testing)
@@ -248,7 +253,7 @@ For MIDI/MPE mode:
 1. **Clone the repository:**
 
 ```bash
-git clone https://github.com/AmarilloBit/cuerposonoro.git
+git clone https://github.com/maramotto/cuerposonoro.git
 cd cuerposonoro
 ```
 
@@ -314,6 +319,77 @@ python main.py --mode midi --midi-mode musical --debug
 ```
 
 The video file mode loops automatically, making it easy to tweak parameters in `config.yaml` and re-run against the same input without needing a live performer.
+
+---
+
+## Installation
+
+### macOS
+
+**Prerequisites:** Python 3.10+, a webcam, and the synthesizer of your choice (see below).
+
+```bash
+git clone https://github.com/maramotto/cuerposonoro.git
+cd cuerposonoro
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+Verify the installation:
+
+```bash
+python -c "import mediapipe, cv2; print('OK')"
+```
+
+> **Camera permissions:** macOS requires explicit camera access. On first run a system dialog will appear. If you accidentally denied it: System Settings → Privacy & Security → Camera → enable your terminal.
+
+---
+
+### Linux (Ubuntu / Debian)
+
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-pip libportaudio2
+git clone https://github.com/maramotto/cuerposonoro.git
+cd cuerposonoro
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+> **Camera permissions:** add your user to the `video` group if the camera is not accessible:
+> `sudo usermod -aG video $USER` (log out and back in to apply).
+
+---
+
+### Running modes
+
+| Mode | Synthesizer | Command |
+|------|------------|---------|
+| OSC (default) | SuperCollider | `python main.py` |
+| MIDI classic | Surge XT | `python main.py --mode midi --midi-mode classic` |
+| MIDI musical | Surge XT | `python main.py --mode midi --midi-mode musical` |
+| Video file (debug) | any | `python main.py --source path/to/video.mp4 --debug` |
+
+**SuperCollider setup:**
+1. [Download SuperCollider](https://supercollider.github.io/downloads)
+2. Open the files in `supercollider/` and boot the server (`Ctrl+B`)
+3. Run `python main.py`
+
+**Surge XT setup:**
+1. [Download Surge XT](https://surge-synthesizer.github.io/) (free, standalone)
+2. In Surge XT: `Menu → MIDI Settings` → enable input → select "Cuerpo Sonoro" virtual port
+3. Run `python main.py --mode midi --midi-mode musical`
+
+---
+
+### Running tests (no hardware required)
+
+```bash
+pytest tests/unit/ tests/integration/ -v
+```
+
+All 129 tests run without a camera or synthesizer connected.
 
 ---
 
