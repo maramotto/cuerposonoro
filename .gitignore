@@ -5,3 +5,18 @@ benchmarks/results/*/
 benchmarks/charts/*.png
 !benchmarks/results/.gitkeep
 !benchmarks/charts/.gitkeep
+# Benchmarks (datos generados)
+benchmarks/results/
+benchmarks/charts/
+!benchmarks/results/.gitkeep
+!benchmarks/charts/.gitkeep
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Modelos descargados
+*.task
+*.tflite
+*.onnx
