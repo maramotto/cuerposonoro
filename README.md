@@ -14,6 +14,7 @@ Cuerpo Sonoro captures human body movement through computer vision and translate
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+  - [Pose Estimation Backends](#pose-estimation-backends)
 - [MPE Features & Musical Mapping](#mpe-features--musical-mapping)
   - [Chords (Lower Body)](#chords-lower-body)
   - [Melody (Upper Body)](#melody-upper-body)
@@ -28,6 +29,7 @@ Cuerpo Sonoro captures human body movement through computer vision and translate
 - [Installation](#installation)
   - [macOS](#macos)
   - [Linux (Ubuntu / Debian)](#linux-ubuntu--debian)
+  - [NVIDIA Jetson (Orin Nano)](#nvidia-jetson-orin-nano)
   - [Running modes](#running-modes)
   - [Running tests (no hardware required)](#running-tests-no-hardware-required)
 - [Web Demo](#web-demo)
@@ -44,7 +46,9 @@ Cuerpo Sonoro captures human body movement through computer vision and translate
 
 ## Overview
 
-Cuerpo Sonoro explores how the human body can become a musical instrument. A camera captures the performer's movements, MediaPipe estimates body pose in real time, and a set of algorithms extract meaningful motion features. These features are then mapped to musical parameters and sent via OSC to SuperCollider for audio synthesis, or via MIDI/MPE to external synthesizers like Surge XT. Two MIDI modes are available: **classic** (hand position selects note, jerk triggers it) and **musical** (tempo-quantized melody navigating chord tones based on movement direction).
+Cuerpo Sonoro explores how the human body can become a musical instrument. A camera captures the performer's movements, a pose estimation model detects body landmarks in real time, and a set of algorithms extract meaningful motion features. These features are then mapped to musical parameters and sent via OSC to SuperCollider for audio synthesis, or via MIDI/MPE to external synthesizers like Surge XT.
+
+Two MIDI modes are available: **classic** (hand position selects note, jerk triggers it) and **musical** (tempo-quantized melody navigating chord tones based on movement direction).
 
 The system supports two modes of operation:
 
@@ -55,7 +59,7 @@ The system supports two modes of operation:
 
 ```
 Camera → Pose Estimation → Feature Extraction → Mapping → Audio Synthesis
-          (MediaPipe)        (Python)           (OSC/MIDI)  (SuperCollider / Surge XT / Web Audio)
+        (backend-dependent)    (Python)         (OSC/MIDI)  (SuperCollider / Surge XT / Web Audio)
 ```
 
 ---
@@ -72,7 +76,8 @@ The system follows a merged 2-service Docker architecture, chosen over a 3-servi
 │  └──────────────┬──────────────────┘    │
 │                 │                       │
 │  ┌──────────────▼──────────────────┐    │
-│  │  Pose Estimation (MediaPipe)    │    │
+│  │  Pose Estimation (backend)      │    │
+│  │  CPU / Metal / TensorRT         │    │
 │  └──────────────┬──────────────────┘    │
 │                 │                       │
 │  ┌──────────────▼──────────────────┐    │
@@ -91,7 +96,38 @@ The system follows a merged 2-service Docker architecture, chosen over a 3-servi
 └─────────────────────────────────────────┘
 ```
 
-The vision processor uses a **camera abstraction layer** (`capture.py`), implemented as an abstract base class (`BaseCamera`) with two concrete implementations: `WebcamCamera` for live input and `VideoFileCamera` for pre-recorded sessions. Switching between sources requires no changes to the pipeline — only the `--source` flag or `config.yaml`.
+### Pose Estimation Backends
+
+The pose estimation layer supports multiple hardware backends through a common `BasePoseEstimator` interface. The backend is selected automatically based on the hardware detected at startup, or can be forced with the `--backend` flag.
+
+| Backend | Hardware | Model | Landmarks | Multi-person | GPU |
+|---------|----------|-------|-----------|--------------|-----|
+| `cpu` | Any machine | MediaPipe Full | 33 (BlazePose) | No | No |
+| `metal` | Mac Apple Silicon | MediaPipe Full | 33 (BlazePose) | No | Yes (Metal) |
+
+**Auto-detection priority:** `metal` (Darwin + arm64) → `cpu`.
+
+**Override at runtime:**
+```bash
+python main.py --backend cpu       # force CPU on any machine
+python main.py --backend metal     # force Metal (Mac only)
+```
+
+#### GPU backend investigation (Jetson)
+
+The following approaches were attempted to enable GPU inference on the NVIDIA Jetson Orin Nano and all failed:
+
+1. **MediaPipe GPU delegate (pip wheel):** The aarch64 wheel for JetPack 6 is compiled without GPU support. `INFO: Created TensorFlow Lite XNNPACK delegate for CPU` is always printed regardless of the delegate requested.
+
+2. **ONNX Runtime GPU on Jetson:** The `onnxruntime-gpu` package for JetPack 6 / CUDA 12.6 is broken as of March 2026 (known NVIDIA forum issue, no fix available).
+
+3. **TFLite → ONNX conversion with `tflite2onnx`:** MediaPipe models use the `DENSIFY` operator (opcode 124), which `tflite2onnx` does not support. Conversion fails immediately.
+
+4. **TensorRT native TFLite parser:** Removed in TensorRT 8. Not available in TensorRT 10.3.
+
+5. **MediaPipe CPU on Jetson with `jetson_clocks`:** Viable at 55.9ms mean / 56.8ms P95 with clocks fixed. Current production path for the Jetson.
+
+The `tensorrt.py` backend stub remains in the repository for reference but is not active.
 
 ---
 
@@ -147,8 +183,6 @@ The overall motion energy of the body is sent to SuperCollider to control backgr
 
 ### Feature Reference Table
 
-Features implemented in `features.py`:
-
 | Feature | Landmarks Used | Output Range |
 |---------|---------------|-------------|
 | `feetCenterX` | Ankles (27, 28) | 0.0 – 1.0 |
@@ -170,7 +204,8 @@ Features implemented in `features.py`:
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Pose Estimation | [MediaPipe Pose](https://google.github.io/mediapipe/solutions/pose.html) | Real-time body landmark detection (33 points) |
+| Pose Estimation (Mac, GPU) | [MediaPipe Pose](https://google.github.io/mediapipe/solutions/pose.html) + Metal | Real-time body landmark detection (33 points, GPU) |
+| Pose Estimation (fallback) | [MediaPipe Pose](https://google.github.io/mediapipe/solutions/pose.html) CPU | Real-time body landmark detection (33 points, CPU) |
 | Audio Synthesis | [SuperCollider](https://supercollider.github.io/) | Algorithmic sound synthesis via OSC |
 | MIDI/MPE Output | [python-rtmidi](https://github.com/SpotlightKid/python-rtmidi) | MIDI Polyphonic Expression for external synths |
 | External Synth | [Surge XT](https://surge-synthesizer.github.io/) | Open-source MPE-compatible synthesizer |
@@ -192,7 +227,12 @@ cuerposonoro/
 ├── vision_processor/           # Perception + feature extraction module
 │   ├── __init__.py
 │   ├── capture.py              # Camera abstraction layer
-│   ├── pose.py                 # MediaPipe pose estimation wrapper
+│   ├── pose.py                 # BasePoseEstimator interface + PoseEstimator() factory
+│   ├── backends/               # Hardware-specific pose estimation backends
+│   │   ├── __init__.py
+│   │   ├── cpu.py              # CPUPoseEstimator — MediaPipe on CPU (any machine)
+│   │   ├── metal.py            # MetalPoseEstimator — MediaPipe + Metal GPU (Mac Apple Silicon)
+│   │   └── tensorrt.py         # TensorRTPoseEstimator — stub (GPU path not viable, see docs)
 │   ├── features.py             # Motion feature extraction (17 features)
 │   ├── osc_sender.py           # OSC communication to SuperCollider
 │   ├── midi/                   # MIDI sender strategy pattern
@@ -208,7 +248,8 @@ cuerposonoro/
 │   └── ...
 ├── tests/
 │   ├── unit/                   # Automated unit tests (pytest)
-│   │   └── test_features.py
+│   │   ├── test_features.py
+│   │   └── test_backends.py    # CPU & Metal backends, BasePoseEstimator, _detect_backend
 │   ├── integration/            # Automated integration tests (pytest)
 │   │   └── test_integration.py
 │   └── manual/                 # Interactive scripts (require hardware)
@@ -223,8 +264,8 @@ cuerposonoro/
 │   ├── README.md               # Full documentation with results
 │   ├── run_benchmark.py        # Automated benchmark runner
 │   ├── analyze_results.py      # Analysis with pandas + matplotlib
-│   ├── results/                # Session-organized CSV data
-│   └── charts/                 # Generated charts and screenshots
+│   ├── results/                # Session-organized CSV data (gitignored)
+│   └── charts/                 # Generated charts and screenshots (gitignored)
 ├── logs/                       # Session logs (CSV) for analysis
 ├── main.py                     # Application entry point
 ├── config.yaml                 # Centralized configuration
@@ -262,7 +303,6 @@ cd cuerposonoro
 ```bash
 python -m venv venv
 source venv/bin/activate        # macOS/Linux
-# venv\Scripts\activate         # Windows
 pip install -r requirements.txt
 ```
 
@@ -274,19 +314,11 @@ Edit `config.yaml` to adjust camera settings, OSC ports, feature parameters, and
 
 **With SuperCollider (OSC mode):**
 
-1. Open SuperCollider and load the SynthDef files from the `supercollider/` directory.
-2. Boot the SuperCollider server.
-3. Run the vision processor:
-
 ```bash
 python main.py
 ```
 
 **With Surge XT (MIDI/MPE mode):**
-
-1. Open Surge XT in standalone mode.
-2. Enable MIDI input from "Cuerpo Sonoro" virtual port.
-3. Run with MIDI output:
 
 ```bash
 python main.py --mode midi
@@ -297,36 +329,17 @@ python main.py --mode midi
 | Flag | Description |
 |------|-------------|
 | *(none)* | Live webcam, output mode from `config.yaml` |
-| `--source PATH` | Use a video file instead of webcam (loops automatically) |
-| `--debug` | Show feature values and active MIDI notes as an on-screen overlay |
-| `--mode osc\|midi` | Override `output.mode` from `config.yaml` at runtime |
-| `--midi-mode classic\|musical` | Override `output.midi_mode` from `config.yaml` at runtime |
-
-**Examples:**
-
-```bash
-# Live performance with debug overlay
-python main.py --debug
-
-# Validate feature mappings with a pre-recorded video
-python main.py --source tests/videos/my_session.mp4 --debug
-
-# MIDI classic mode (hand position → note, jerk triggers)
-python main.py --mode midi --debug
-
-# MIDI musical mode (tempo-quantized, chord-tone melody)
-python main.py --mode midi --midi-mode musical --debug
-```
-
-The video file mode loops automatically, making it easy to tweak parameters in `config.yaml` and re-run against the same input without needing a live performer.
+| `--backend cpu\|metal` | Override pose estimation backend |
+| `--source PATH` | Use a video file instead of webcam |
+| `--debug` | Show feature values and skeleton overlay |
+| `--mode osc\|midi` | Override output mode |
+| `--midi-mode classic\|musical` | Override MIDI mode |
 
 ---
 
 ## Installation
 
 ### macOS
-
-**Prerequisites:** Python 3.10+, a webcam, and the synthesizer of your choice (see below).
 
 ```bash
 git clone https://github.com/maramotto/cuerposonoro.git
@@ -336,11 +349,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Verify the installation:
-
-```bash
-python -c "import mediapipe, cv2; print('OK')"
-```
+The Metal backend is selected automatically on Apple Silicon. On Intel Macs, CPU is used.
 
 > **Camera permissions:** macOS requires explicit camera access. On first run a system dialog will appear. If you accidentally denied it: System Settings → Privacy & Security → Camera → enable your terminal.
 
@@ -357,8 +366,19 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> **Camera permissions:** add your user to the `video` group if the camera is not accessible:
-> `sudo usermod -aG video $USER` (log out and back in to apply).
+---
+
+### NVIDIA Jetson (Orin Nano)
+
+MediaPipe GPU inference is not viable on the Jetson via pip (see [GPU backend investigation](#gpu-backend-investigation-jetson)). The Jetson runs the CPU backend with clocks fixed for stable latency.
+
+```bash
+sudo jetson_clocks
+git clone https://github.com/maramotto/cuerposonoro.git
+cd cuerposonoro
+pip3 install -r requirements.txt
+python3 main.py --backend cpu --debug
+```
 
 ---
 
@@ -371,16 +391,6 @@ pip install -r requirements.txt
 | MIDI musical | Surge XT | `python main.py --mode midi --midi-mode musical` |
 | Video file (debug) | any | `python main.py --source path/to/video.mp4 --debug` |
 
-**SuperCollider setup:**
-1. [Download SuperCollider](https://supercollider.github.io/downloads)
-2. Open the files in `supercollider/` and boot the server (`Ctrl+B`)
-3. Run `python main.py`
-
-**Surge XT setup:**
-1. [Download Surge XT](https://surge-synthesizer.github.io/) (free, standalone)
-2. In Surge XT: `Menu → MIDI Settings` → enable input → select "Cuerpo Sonoro" virtual port
-3. Run `python main.py --mode midi --midi-mode musical`
-
 ---
 
 ### Running tests (no hardware required)
@@ -389,15 +399,13 @@ pip install -r requirements.txt
 pytest tests/unit/ tests/integration/ -v
 ```
 
-All 129 tests run without a camera or synthesizer connected.
+All tests run without a camera or synthesizer connected.
 
 ---
 
 ## Web Demo
 
 A browser-based version is deployed at **[cuerposonoro.art](https://cuerposonoro.art)**, allowing anyone with a webcam to experience the installation without any software installation.
-
-The web demo uses a different architecture optimized for the browser:
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -413,63 +421,54 @@ The web demo uses a different architecture optimized for the browser:
 └─────────────────────────────────────────────────┘
 ```
 
-Pose detection runs client-side in the browser using MediaPipe.js. Landmarks are sent to the FastAPI backend via WebSocket for feature extraction, and the computed features are returned to drive browser-based audio synthesis through the Web Audio API.
-
 ---
 
 ## Testing
 
-The project has a three-tier testing strategy:
-
-**Automated tests (no hardware required):**
 ```bash
-pytest tests/ -v                          # all automated (129 tests)
-pytest tests/unit/ -v                     # unit tests only (80 tests)
+pytest tests/ -v                          # all automated (168 tests)
+pytest tests/unit/ -v                     # unit tests only (119 tests)
 pytest tests/integration/ -v              # integration tests only (~50 tests)
 ```
 
-- **Unit tests** (`tests/unit/test_features.py`) — test all 17 feature extraction methods with synthetic landmark data. Cover output ranges, edge cases, temporal smoothing, and boundary conditions.
-- **Integration tests** (`tests/integration/test_integration.py`) — test OSCSender, MidiSender, and full pipeline flows with mocked I/O (no SuperCollider or Surge XT needed).
+Manual tests (require hardware):
 
-**Manual tests (require hardware):**
-
-Interactive scripts for validating the full system with real camera input and audio output. See [`tests/manual/README.md`](tests/manual/README.md) for prerequisites and usage instructions.
 ```bash
-python tests/manual/manual_camera.py      # verify webcam
-python tests/manual/manual_pose.py        # test pose detection
-python tests/manual/manual_e2e_osc.py     # full pipeline → SuperCollider
-python tests/manual/manual_e2e_midi_debug.py  # full pipeline → Surge XT
+python tests/manual/manual_camera.py
+python tests/manual/manual_pose.py
+python tests/manual/manual_e2e_osc.py
+python tests/manual/manual_e2e_midi_debug.py
 ```
 
-Manual E2E tests generate CSV logs in `tests/manual/logs/` with per-frame data for post-hoc analysis.
+See [`tests/manual/README.md`](tests/manual/README.md) for prerequisites and usage.
 
 ---
 
 ## Benchmarks
 
-The project includes a dedicated benchmarking system for measuring pipeline latency across different hardware and software configurations. This data supports the evaluation chapter of the TFG.
+The project includes a dedicated benchmarking system. Key results:
 
-The benchmark runner instruments each pipeline stage with `time.perf_counter()` and tests a matrix of **36 configurations** (2 cameras × 2 resolutions × 3 pose models × 3 output modes), generating per-frame CSV data and publication-quality charts.
+**Mac (MacBook Pro 2020 i7 + Logitech C922, MediaPipe CPU, 300 frames):**
 
-**Key results** (MacBook Pro 2020 i7 + Logitech C922, 300 frames per config):
-
-| Pose Model | Mean Latency | FPS | Under 80ms Target |
-|------------|-------------|-----|-------------------|
+| Pose Model | Mean Latency | FPS | Under 80ms |
+|------------|-------------|-----|------------|
 | Lite (complexity=0) | 33.7ms | ~30 | 99–100% |
 | Full (complexity=1) | 34.7ms | ~30 | 99–100% |
 | Heavy (complexity=2) | 86.6ms | ~12 | 6–85% |
 
-Pose estimation is the pipeline bottleneck (67% of total time). Lite and Full perform nearly identically, while Heavy exceeds the 80ms target. Camera choice and output protocol (OSC vs MIDI) have negligible impact.
+**Jetson Orin Nano + Logitech C922, MediaPipe CPU, 60 frames:**
+
+| Configuration | Mean | P95 | Max |
+|---------------|------|-----|-----|
+| Without `jetson_clocks` | 89.0ms | 98.9ms | 99.4ms |
+| With `jetson_clocks` | 55.9ms | 56.8ms | 57.1ms |
 
 ```bash
-# Run benchmarks
 python benchmarks/run_benchmark.py --preview --session-name my-session
-
-# Analyze results
 python benchmarks/analyze_results.py --save
 ```
 
-For full methodology, results, and charts, see [`benchmarks/README.md`](benchmarks/README.md).
+For full methodology and results, see [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 
@@ -483,15 +482,11 @@ docker compose up --build
 
 ### Cloud (Hetzner VPS)
 
-The web demo is deployed on a Hetzner VPS with Docker Compose, Nginx as a reverse proxy, and Let's Encrypt for HTTPS (required for browser camera access).
-
 ```bash
 ssh user@your-server
 cd ~/cuerposonoro-webdemo
 docker compose up -d --build
 ```
-
-SSL certificates are managed with Certbot and automatically renewed.
 
 ---
 
@@ -499,12 +494,10 @@ SSL certificates are managed with Certbot and automatically renewed.
 
 This project is a Final Degree Project (Trabajo de Fin de Grado, TFG) for the **Software Engineering degree** at **Universidad Rey Juan Carlos (URJC)**, Madrid, Spain.
 
-It bridges software engineering, artificial intelligence, and digital art, demonstrating competencies in computer vision, real-time data processing, audio synthesis, cloud deployment, and interactive system design.
-
 ### Evaluation Criteria
 
 - **Quantitative:** FPS, end-to-end latency, pose detection robustness.
-- **Qualitative:** User testing with 3–5 participants measuring perceived responsiveness, expressiveness, intuitiveness, engagement, and sense of control (Likert scale questionnaire).
+- **Qualitative:** User testing with 3-5 participants measuring perceived responsiveness, expressiveness, intuitiveness, engagement, and sense of control (Likert scale questionnaire).
 
 ### Ethical Considerations
 
@@ -516,8 +509,6 @@ It bridges software engineering, artificial intelligence, and digital art, demon
 
 ## License
 
-This project is open source. See the [LICENSE](LICENSE) file for details.
-
 - **Code:** [Unlicense](LICENSE)
 - **Documentation:** [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
@@ -528,6 +519,6 @@ This project is open source. See the [LICENSE](LICENSE) file for details.
 **Ana María J Crespo**
 
 - Web: [maramotto/cuerposonoro](https://maramotto.com/cuerposonoro.html)
-- Github:  [@maramotto](https://github.com/maramotto)
+- Github: [@maramotto](https://github.com/maramotto)
 - Email: am.juradoc@alumnos.urjc.es
 - University: ETSII, Universidad Rey Juan Carlos
