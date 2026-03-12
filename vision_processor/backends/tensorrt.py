@@ -1,25 +1,20 @@
 """
 TensorRT backend for pose estimation on NVIDIA Jetson.
 
-Uses MediaPipe Tasks API with the model converted to TensorRT format,
-running inference directly on the Jetson's Ampere GPU via TensorRT.
+Uses the BlazePose model converted to ONNX and compiled to a TensorRT engine,
+running inference directly on the Jetson Ampere GPU.
 Expected latency: ~15ms vs ~60ms on CPU.
 
-This backend follows the same approach as MetalPoseEstimator but targets
-the NVIDIA GPU path. Since MediaPipe's pip wheel does not support GPU on
-Jetson (build flags issue), we use TensorRT directly through the ONNX
-Runtime TensorRT Execution Provider, using the same pose model converted
-to ONNX format.
+Since MediaPipe's pip wheel does not support GPU on Jetson (build flags issue),
+inference is handled directly through TensorRT + pycuda.
 
 Requirements:
     - NVIDIA Jetson with JetPack 6+ (CUDA 12.6, TensorRT 10.3)
-    - tensorrt Python bindings (already present in the Jetson system)
-    - onnx, onnxruntime (CPU version, for preprocessing only)
-    - Model: pose_landmarker_full.task (converted to ONNX offline)
+    - pycuda: pip install pycuda
+    - Model: pose_model.onnx (converted from pose_landmarker_full.task)
 
-NOTE: The first run builds the TensorRT engine from the ONNX model.
-      This takes ~2-3 minutes but only happens once. The engine is
-      cached in pose_engine.trt next to the model file.
+NOTE: The first run builds the TensorRT engine from the ONNX model (~2-3 min).
+      Subsequent runs load the cached engine directly from pose_engine.trt.
 """
 
 import os
@@ -34,11 +29,11 @@ _MODEL_DIR = os.path.join(
 _ONNX_PATH = os.path.join(_MODEL_DIR, "pose_model.onnx")
 _ENGINE_PATH = os.path.join(_MODEL_DIR, "pose_engine.trt")
 
-# Dimensiones de entrada que espera el modelo de pose de MediaPipe
+# Input dimensions expected by the BlazePose model
 _INPUT_HEIGHT = 256
 _INPUT_WIDTH = 256
 
-# Índices de landmarks en la salida del modelo (33 landmarks de BlazePose)
+# Number of landmarks in BlazePose output
 _NUM_LANDMARKS = 33
 
 
@@ -60,30 +55,27 @@ class TensorRTPoseEstimator(BasePoseEstimator):
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
     ):
+        # All GPU-specific imports are deferred to avoid import errors
+        # on machines where pycuda/tensorrt are not installed.
         import tensorrt as trt
-        import pycuda.driver as cuda
-        import pycuda.autoinit  # noqa: F401 — inicializa CUDA automáticamente
 
         self._trt = trt
-        self._cuda = cuda
-
         self._min_confidence = min_detection_confidence
 
         if not os.path.exists(_ENGINE_PATH):
             if not os.path.exists(_ONNX_PATH):
                 raise FileNotFoundError(
-                    f"Modelo ONNX no encontrado en {_ONNX_PATH}.\n"
-                    "Ejecuta primero: python tools/convert_model.py"
+                    f"ONNX model not found at {_ONNX_PATH}.\n"
+                    "Run first: python tools/convert_model.py"
                 )
-            print("[TensorRTBackend] Construyendo motor TensorRT (primera vez, ~2-3 min)...")
+            print("[TensorRTBackend] Building TensorRT engine (first run, ~2-3 min)...")
             self._build_engine()
-            print("[TensorRTBackend] Motor construido y guardado.")
+            print("[TensorRTBackend] Engine built and cached.")
 
-        print("[TensorRTBackend] Cargando motor TensorRT...")
+        print("[TensorRTBackend] Loading TensorRT engine...")
         self._engine, self._context = self._load_engine()
         self._allocate_buffers()
 
-        # Para dibujar el esqueleto
         import mediapipe as mp
         self._mp_pose = mp.solutions.pose
         self._mp_drawing = mp.solutions.drawing_utils
@@ -105,15 +97,15 @@ class TensorRTPoseEstimator(BasePoseEstimator):
         with open(_ONNX_PATH, "rb") as f:
             if not parser.parse(f.read()):
                 errors = [str(parser.get_error(i)) for i in range(parser.num_errors)]
-                raise RuntimeError(f"Error al parsear ONNX: {errors}")
+                raise RuntimeError(f"Failed to parse ONNX model: {errors}")
 
         config = builder.create_builder_config()
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1 GB
 
-        # FP16 si la GPU lo soporta (Ampere sí)
+        # FP16 enabled on Ampere and later
         if builder.platform_has_fast_fp16:
             config.set_flag(trt.BuilderFlag.FP16)
-            print("[TensorRTBackend] FP16 activado.")
+            print("[TensorRTBackend] FP16 enabled.")
 
         serialized = builder.build_serialized_network(network, config)
         with open(_ENGINE_PATH, "wb") as f:
@@ -132,18 +124,24 @@ class TensorRTPoseEstimator(BasePoseEstimator):
         return engine, context
 
     def _allocate_buffers(self):
-        """Allocate GPU and CPU memory buffers for inference."""
-        import pycuda.driver as cuda
+        """Allocate pinned host memory and device memory for inference I/O."""
+        try:
+            import pycuda.autoinit  # noqa: F401 — initializes CUDA context
+            import pycuda.driver as cuda
+        except ImportError as e:
+            raise RuntimeError(
+                "pycuda is required for the TensorRT backend."
+                "Install it on the Jetson with: pip install pycuda"
+            ) from e
 
+        self._cuda = cuda
         self._inputs = []
         self._outputs = []
         self._bindings = []
         self._stream = cuda.Stream()
 
         for binding in self._engine:
-            size = (
-                self._trt.volume(self._engine.get_binding_shape(binding))
-            )
+            size = self._trt.volume(self._engine.get_binding_shape(binding))
             dtype = self._trt.nptype(self._engine.get_binding_dtype(binding))
             host_mem = cuda.pagelocked_empty(size, dtype)
             device_mem = cuda.mem_alloc(host_mem.nbytes)
@@ -158,13 +156,12 @@ class TensorRTPoseEstimator(BasePoseEstimator):
         """
         Prepare frame for TensorRT inference.
 
-        Resizes to 256x256, converts BGR→RGB, normalizes to [0,1],
-        and reshapes to (1, 3, 256, 256) NCHW format.
+        Resizes to 256x256, converts BGR to RGB, normalizes to [0, 1],
+        and reshapes to NCHW format (1, 3, 256, 256).
         """
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (_INPUT_WIDTH, _INPUT_HEIGHT))
         normalized = resized.astype(np.float32) / 255.0
-        # HWC → NCHW
         nchw = np.transpose(normalized, (2, 0, 1))[np.newaxis, ...]
         return np.ascontiguousarray(nchw)
 
@@ -172,14 +169,12 @@ class TensorRTPoseEstimator(BasePoseEstimator):
         """
         Run pose estimation on GPU via TensorRT.
 
-        Returns numpy array of shape (33, 4): [x, y, z, visibility].
-        Returns None if no pose is detected (low confidence).
+        Returns a numpy array of shape (33, 4): [x, y, z, visibility].
+        Returns None if no pose is detected (mean visibility below threshold).
         """
-        import pycuda.driver as cuda
-
+        cuda = self._cuda
         input_data = self._preprocess(frame)
 
-        # Copiar input a GPU
         np.copyto(self._inputs[0]["host"], input_data.ravel())
         cuda.memcpy_htod_async(
             self._inputs[0]["device"],
@@ -187,13 +182,11 @@ class TensorRTPoseEstimator(BasePoseEstimator):
             self._stream,
         )
 
-        # Inferencia
         self._context.execute_async_v2(
             bindings=self._bindings,
             stream_handle=self._stream.handle,
         )
 
-        # Copiar output de GPU a CPU
         cuda.memcpy_dtoh_async(
             self._outputs[0]["host"],
             self._outputs[0]["device"],
@@ -203,13 +196,11 @@ class TensorRTPoseEstimator(BasePoseEstimator):
 
         raw = self._outputs[0]["host"].reshape(_NUM_LANDMARKS, -1)
 
-        # Filtrar por confianza (columna 3 = visibility/score)
         if raw.shape[1] >= 4:
-            mean_visibility = raw[:, 3].mean()
-            if mean_visibility < self._min_confidence:
+            if raw[:, 3].mean() < self._min_confidence:
                 return None
 
-        return raw  # shape (33, 4): x, y, z, visibility
+        return raw
 
     def get_landmarks(self, results) -> list | None:
         """Convert TensorRT output array to standard landmark dict list."""
@@ -227,7 +218,7 @@ class TensorRTPoseEstimator(BasePoseEstimator):
         ]
 
     def draw_skeleton(self, frame: np.ndarray, results) -> np.ndarray:
-        """Draw skeleton from TensorRT landmark array."""
+        """Draw pose skeleton from TensorRT landmark array."""
         if results is None:
             return frame
 
