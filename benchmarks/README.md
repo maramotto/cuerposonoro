@@ -7,19 +7,18 @@ Systematic evaluation of the Cuerpo Sonoro pipeline latency across different har
 ## Table of Contents
 
 - [Methodology](#methodology)
-- [Test Environment](#test-environment)
+- [Test Environments](#test-environments)
 - [Configuration Matrix](#configuration-matrix)
 - [Results](#results)
-  - [Overview](#overview)
-  - [Per-Stage Breakdown](#per-stage-breakdown)
-  - [Pose Model Impact](#pose-model-impact)
-  - [Key Findings](#key-findings)
+  - [Mac — Overview](#mac--overview)
+  - [Mac — Per-Stage Breakdown](#mac--per-stage-breakdown)
+  - [Mac — Pose Model Impact](#mac--pose-model-impact)
+  - [Mac — Key Findings](#mac--key-findings)
+  - [Jetson Orin Nano — MediaPipe CPU](#jetson-orin-nano--mediapipe-cpu)
+  - [Jetson Orin Nano — YOLOv8-Pose + TensorRT](#jetson-orin-nano--yolov8-pose--tensorrt)
 - [Latency Distribution](#latency-distribution)
 - [Conclusions](#conclusions)
 - [Reproducing the Benchmarks](#reproducing-the-benchmarks)
-  - [Running Benchmarks](#running-benchmarks)
-  - [Analyzing Results](#analyzing-results)
-  - [Directory Structure](#directory-structure)
 
 ---
 
@@ -35,36 +34,57 @@ Camera Capture → Pose Estimation → Feature Extraction → OSC/MIDI Send
 Each benchmark run:
 
 1. Opens the camera and initializes all pipeline components for the given configuration.
-2. Discards 30 warmup frames to let MediaPipe's internal tracking stabilize.
-3. Measures 300 frames, recording per-stage timestamps for each frame.
+2. Discards 30 warmup frames to let the pose estimator stabilize.
+3. Measures the target number of frames, recording per-stage timestamps for each frame.
 4. Runs **headless** (no OpenCV display window) to avoid contaminating measurements with rendering overhead.
 5. Outputs raw per-frame data and aggregate statistics (mean, P50, P95, P99, max) as CSV files.
 
-An optional `--preview` mode opens a camera window with skeleton overlay *before* each configuration starts, allowing the operator to verify positioning, then closes it before headless measurement begins.
-
 **What is measured:** Software-level latency from frame capture to OSC/MIDI send. This does not include the audio engine processing time (SuperCollider buffer, typically 3-6ms on CoreAudio, 1.5ms on JACK).
 
-**What is not measured:** The final audio output latency (DAC buffer). For full end-to-end measurement, a high-speed camera recording both the skeleton display and audio output would be needed.
+**What is not measured:** The final audio output latency (DAC buffer).
 
 ---
 
-## Test Environment
+## Test Environments
+
+### Environment A — Mac (development machine)
 
 | Component | Specification |
 |-----------|--------------|
 | Machine | MacBook Pro 2020 (Intel i7 Quad-Core 2.3 GHz, 32 GB RAM) |
 | OS | macOS (Darwin x86_64) |
 | Camera 1 | MacBook Pro Built-in (720p native) |
-| Camera 2 | Logitech C922 (1080p native, connected via USB) |
+| Camera 2 | Logitech C922 (1080p native, USB) |
 | Python | 3.11 |
-| MediaPipe | Pose (CPU inference, no GPU on macOS) |
+| Backend | MediaPipe Full — CPU (XNNPACK delegate) |
 | Frames per config | 300 (+ 30 warmup) |
+
+### Environment B — Mac Apple Silicon (production candidate)
+
+| Component | Specification |
+|-----------|--------------|
+| Machine | MacBook Pro M4 |
+| OS | macOS (Darwin arm64) |
+| Backend | MediaPipe Full — Metal GPU delegate |
+| Status | Verified working. Benchmark pending. |
+
+### Environment C — NVIDIA Jetson Orin Nano (installation hardware)
+
+| Component | Specification |
+|-----------|--------------|
+| Machine | NVIDIA Jetson Orin Nano 8GB (JetPack 6.1, CUDA 12.6, TensorRT 10.3) |
+| OS | Ubuntu 22.04 aarch64 |
+| Camera | Logitech C922 (USB) |
+| Python | 3.10 |
+| Backend A | MediaPipe Full — CPU (XNNPACK delegate) |
+| Backend B | YOLOv8-Pose — TensorRT GPU (pending) |
+| Frames | 60 (+ 10 warmup) |
 
 ---
 
 ## Configuration Matrix
 
-The benchmark tests a full matrix of **36 configurations**:
+### Mac matrix (36 configurations)
 
 ```
 2 cameras × 2 resolutions × 3 pose models × 3 output modes = 36
@@ -75,39 +95,39 @@ The benchmark tests a full matrix of **36 configurations**:
 | Camera | MacBook Pro Built-in (device 1), Logitech C922 (device 0) |
 | Resolution | 480p (640×480), 720p (1280×720) |
 | Pose model | Lite (complexity=0), Full (complexity=1), Heavy (complexity=2) |
-| Output mode | OSC individual messages, OSC bundle, MIDI/MPE |
+| Output mode | OSC individual, OSC bundle, MIDI/MPE |
+
+### Jetson matrix
+
+| Configuration | Backend | `jetson_clocks` | Frames |
+|---------------|---------|-----------------|--------|
+| Baseline CPU | MediaPipe Full | Off | 60 |
+| CPU with clocks | MediaPipe Full | On | 60 |
+| GPU TensorRT | YOLOv8-Pose | On | pending |
 
 ---
 
 ## Results
 
-### Overview
+### Mac — Overview
 
 All 36 configurations sorted by mean total latency. Lite and Full models comfortably meet the 80ms target across all cameras and output modes. Heavy consistently exceeds it.
 
 ![Benchmark comparison across all configurations](charts/benchmark_output_mean_latency.png)
 
-The fastest configuration is `macbook_480p_lite_osc_bundle` at **33.3ms** mean latency. The slowest is `c922_720p_heavy_midi` at **99.2ms**. The full comparison table sorted by mean latency:
+The fastest configuration is `macbook_480p_lite_osc_bundle` at **33.3ms** mean latency. The slowest is `c922_720p_heavy_midi` at **99.2ms**.
 
 ![Full comparison table](charts/benchmark_output_comparison-configurations.png)
 
-### Per-Stage Breakdown
-
-The per-stage breakdown reveals where time is spent in each configuration:
+### Mac — Per-Stage Breakdown
 
 ![Per-stage breakdown in milliseconds](charts/benchmark_output_per-stage-breakdown.png)
 
-Across all configurations, the time distribution follows a consistent pattern: capture and pose dominate, while features and send are negligible:
-
 ![Per-stage percentage breakdown](charts/benchmark_output_comparison-configurations-percentage.png)
-
-The stacked bar chart makes the pattern visually clear — Lite and Full configurations stay well under the 80ms red line, while Heavy configurations blow past it:
 
 ![Per-stage stacked bar chart](charts/chart_stages.png)
 
-### Pose Model Impact
-
-The pose model complexity is the single most impactful variable in the entire matrix. This grouped bar chart isolates the effect:
+### Mac — Pose Model Impact
 
 ![Pose model complexity comparison](charts/chart_pose_comparison.png)
 
@@ -119,54 +139,93 @@ The pose model complexity is the single most impactful variable in the entire ma
 
 Critical observations:
 
-- **Full costs only +1.0ms vs Lite.** This is the most important finding — Full provides better pose accuracy at virtually no latency cost, making it the clear recommendation for production use.
-- **Heavy costs +51.9ms vs Full.** This nearly triples the pose estimation time and pushes most configurations above the 80ms target. Heavy is not viable for real-time interaction on this hardware.
-- The +4ms difference between Lite and Full in the pose stage is partially offset by capture time differences across configurations.
+- **Full costs only +1.0ms vs Lite.** Full provides better pose accuracy at virtually no latency cost — it is the clear recommendation for production use.
+- **Heavy costs +51.9ms vs Full.** Heavy is not viable for real-time interaction on this hardware.
 
-### Key Findings
-
-The automated analysis produces this summary:
+### Mac — Key Findings
 
 ![Key findings](charts/benchmark_output_key-findings.png)
 
-Summary of findings across all 36 configurations:
-
 | Variable | Finding | Impact |
 |----------|---------|--------|
-| **Pose model** | Bottleneck. Full ≈ Lite, Heavy 2.5× slower | **Critical** — choose Full |
-| **Camera** | C922 1.7ms slower than Built-in on average | **Negligible** |
-| **Resolution** | 480p vs 720p: ~1-3ms difference | **Negligible** (MediaPipe resizes internally to 256×256) |
+| **Pose model** | Bottleneck. Full ≈ Lite, Heavy 2.5× slower | **Critical** |
+| **Camera** | C922 1.7ms slower than Built-in | **Negligible** |
+| **Resolution** | 480p vs 720p: ~1-3ms difference | **Negligible** |
 | **Output mode** | OSC vs MIDI: ~3.5ms difference | **Negligible** |
-| **OSC send mode** | Individual vs bundle: <1ms difference | **Negligible** |
-| **Pipeline bottleneck** | Pose estimation: 67% of total time | Features + Send combined: <1ms |
+| **OSC send mode** | Individual vs bundle: <1ms | **Negligible** |
+| **Pipeline bottleneck** | Pose estimation: 67% of total time | Features + Send: <1ms |
 
 ---
 
-## Latency Distribution
+### Jetson Orin Nano — MediaPipe CPU
 
-The box plot shows the full distribution of per-frame latency for all 36 configurations. The red dashed line marks the 80ms target:
+Measured with Logitech C922 at 1280×720, model_complexity=1 (Full), 60 frames.
+
+#### Without `jetson_clocks` (default power mode)
+
+| Metric | Value |
+|--------|-------|
+| Mean | 89.0ms |
+| P50 | 92.9ms |
+| P95 | 98.9ms |
+| Max | 99.4ms |
+
+**Result: outside the 80ms budget.** The Jetson throttles CPU frequency by default to manage thermals.
+
+#### With `jetson_clocks` (clocks fixed at maximum)
+
+```bash
+sudo jetson_clocks
+```
+
+| Metric | Value |
+|--------|-------|
+| Mean | **55.9ms** |
+| P50 | 55.8ms |
+| P95 | 56.8ms |
+| Max | 57.1ms |
+
+**Result: inside the 80ms budget with ~24ms margin.** Variance is minimal (±1ms), suitable for exhibition.
+
+Note: this configuration was characterized and documented but not adopted as the production backend for the Jetson. See below.
+
+#### Why CPU was not chosen for Jetson production
+
+MediaPipe CPU at 55.9ms is technically viable, but it uses only the CPU, leaving the Ampere GPU idle. The Jetson was chosen specifically for GPU inference. Additionally, CPU-only MediaPipe provides no multi-person capability — a meaningful limitation for a public installation where multiple visitors may interact simultaneously.
+
+---
+
+### Jetson Orin Nano — YOLOv8-Pose + TensorRT
+
+**Status: pending.** The YOLOv8 backend (`vision_processor/backends/yolov8.py`) is implemented but not yet benchmarked on the Jetson. Results will be added here once measured.
+
+Expected: <20ms pose stage, ~30 FPS, multi-person detection.
+
+---
+
+## Latency Distribution (Mac)
 
 ![Latency distribution box plot](charts/chart_boxplot.png)
 
-Lite and Full configurations cluster tightly around 33-35ms with occasional outliers. Heavy configurations show both higher medians (70-100ms) and wider variance, with P95 values reaching 110-115ms.
+Lite and Full configurations cluster tightly around 33-35ms. Heavy shows higher medians (70-100ms) and wider variance, with P95 values reaching 110-115ms.
 
 ---
 
 ## Conclusions
 
-1. **The 80ms target is met** by all Lite and Full configurations (99-100% of frames under target), on both cameras and all output modes.
+### Mac
 
-2. **MediaPipe Full (complexity=1) is the recommended model** for production use. It provides better pose accuracy than Lite at essentially the same latency cost (+1ms). There is no reason to use Lite unless targeting significantly weaker hardware.
+1. **The 80ms target is met** by all Lite and Full configurations (99-100% of frames).
+2. **MediaPipe Full (complexity=1) is the recommended model** on Mac. It costs only +1ms over Lite with meaningfully better accuracy.
+3. **Heavy is not viable** for real-time interaction on this hardware.
+4. **Camera, resolution, and output protocol are negligible** variables. Choose based on image quality and physical constraints, not latency.
+5. **Pose estimation is the bottleneck** (67% of pipeline time). GPU acceleration is the primary optimization lever.
 
-3. **MediaPipe Heavy (complexity=2) is not viable** for real-time interaction on this hardware. Only 6-85% of frames meet the 80ms target depending on configuration.
+### Jetson
 
-4. **Camera choice doesn't matter for latency.** The Logitech C922 and MacBook built-in camera perform within 2ms of each other. Camera choice should be driven by image quality, field of view, and mounting considerations.
-
-5. **Output protocol doesn't matter for latency.** OSC and MIDI are both fire-and-forget at the send stage (<0.5ms). Bundle vs individual OSC messages make no measurable difference.
-
-6. **Resolution doesn't matter for latency.** MediaPipe internally resizes input to 256×256 regardless of capture resolution. The 1-3ms difference is from capture buffer handling, not from pose inference.
-
-7. **Pose estimation is the bottleneck** (67% of pipeline time). Any future optimization effort should focus on this stage — for example, GPU-accelerated inference or switching to a lighter model architecture.
+6. **`jetson_clocks` is mandatory** for sub-80ms performance. Without it, MediaPipe CPU exceeds the budget at 89ms mean.
+7. **The production backend for Jetson is YOLOv8-Pose + TensorRT**, chosen for GPU utilization and multi-person detection over the CPU-only MediaPipe path.
+8. **GPU acceleration via MediaPipe on Jetson is not viable** without compiling from source. The pip wheel for aarch64/JetPack 6 runs on CPU only, and MediaPipe's TFLite models cannot be converted to TensorRT due to the unsupported `DENSIFY` operator.
 
 ---
 
@@ -175,10 +234,10 @@ Lite and Full configurations cluster tightly around 33-35ms with occasional outl
 ### Running Benchmarks
 
 ```bash
-# List all 36 combinations without running
+# List all combinations without running
 python benchmarks/run_benchmark.py --list
 
-# Run the full matrix with camera preview before each config
+# Run full Mac matrix with camera preview
 python benchmarks/run_benchmark.py --preview --session-name full-matrix
 
 # Run a filtered subset
@@ -194,68 +253,23 @@ python benchmarks/run_benchmark.py --frames 500 --warmup 50
 |------|-------------|
 | `--list` | Print all combinations and exit |
 | `--preview` | Show camera feed with skeleton before each run |
-| `--camera-profile` | Filter by camera (e.g. `c922`, `macbook`) |
-| `--pose` | Filter by pose model (e.g. `lite`, `full`, `heavy`) |
-| `--output` | Filter by output mode (e.g. `osc`, `midi`) |
+| `--camera-profile` | Filter by camera (`c922`, `macbook`) |
+| `--pose` | Filter by pose model (`lite`, `full`, `heavy`) |
+| `--output` | Filter by output mode (`osc`, `midi`) |
 | `--frames N` | Frames to measure per config (default: 300) |
 | `--warmup N` | Warmup frames to discard (default: 30) |
 | `--session-name` | Custom name for the results folder |
-| `--config-path` | Path to config.yaml if not at project root |
-
-**Before running**, verify camera device IDs match `config.yaml`:
-
-```bash
-python -c "
-import cv2
-for i in range(5):
-    cap = cv2.VideoCapture(i)
-    if cap.isOpened():
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f'  device {i}: {w}x{h}')
-        cap.release()
-"
-```
-
-**Tips for accurate measurements:** Close CPU-heavy applications, connect the power adapter (avoid thermal throttling), and stay visible in the camera frame throughout the run.
 
 ### Analyzing Results
 
-Requires `pandas` and `matplotlib`:
-
 ```bash
 pip install pandas matplotlib
-```
 
-```bash
-# Analyze all sessions
-python benchmarks/analyze_results.py
-
-# Analyze a specific session
-python benchmarks/analyze_results.py --session 2026-02-17_full-matrix
-
-# Save charts as PNG to benchmarks/charts/
 python benchmarks/analyze_results.py --save
-
-# Filter by keyword
+python benchmarks/analyze_results.py --session 2026-02-17_full-matrix
 python benchmarks/analyze_results.py --filter c922
-
-# Console output only, no charts
-python benchmarks/analyze_results.py --no-charts
-
-# List available sessions
 python benchmarks/analyze_results.py --list-sessions
 ```
-
-The analysis script outputs:
-
-- **Comparison table** — all configurations sorted by mean latency with P50, P95, FPS, and % under 80ms
-- **Per-stage breakdown** — mean latency and percentage per pipeline stage
-- **Key findings** — automated identification of fastest/slowest configs, pose model impact, camera comparison, bottleneck analysis
-- **Charts** (with `--save`):
-  - `chart_stages.png` — stacked bar chart of per-stage latency
-  - `chart_boxplot.png` — box plot of latency distribution
-  - `chart_pose_comparison.png` — grouped bar comparing pose model complexities
 
 ### Directory Structure
 

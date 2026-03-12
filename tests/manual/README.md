@@ -4,6 +4,14 @@ These are interactive test scripts that require hardware (camera, speakers) and/
 
 All commands should be run from the **project root** (`cuerposonoro/`).
 
+The pose estimation backend is selected automatically based on hardware, or can be forced with `--backend`:
+
+```bash
+python main.py --backend cpu      # MediaPipe CPU (any machine)
+python main.py --backend metal    # MediaPipe + Metal GPU (Mac Apple Silicon)
+
+```
+
 ---
 
 ## Scripts
@@ -18,12 +26,14 @@ Verifies webcam works and displays FPS.
 ---
 
 ### manual_pose.py — Pose Estimation
-Tests MediaPipe pose detection with skeleton overlay.
+Tests pose detection with skeleton overlay. Uses the backend selected in `config.yaml` or `--backend`.
 
 **Requires:** Webcam  
 **Run:** `python tests/manual/manual_pose.py`  
+**Run (force CPU):** `python tests/manual/manual_pose.py --backend cpu`  
+**Run (Metal GPU):** `python tests/manual/manual_pose.py --backend metal`  
 **Controls:** `q` quit  
-**Shows:** FPS, detection rate, skeleton overlay
+**Shows:** FPS, detection rate, skeleton overlay, active backend
 
 ---
 
@@ -84,6 +94,20 @@ Tests MidiSender in isolation: chord changes, melody triggers, expression.
 
 **Run:** `python tests/manual/manual_midi_sender.py`  
 **Shows:** Chord changes, note triggers, expression values
+
+---
+
+## Running on Jetson
+
+On the Jetson Orin Nano, run `sudo jetson_clocks` before any manual test to ensure stable latency:
+
+```bash
+sudo jetson_clocks
+python tests/manual/manual_pose.py --backend cpu
+```
+
+
+---
 
 ## Logs
 
