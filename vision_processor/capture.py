@@ -103,6 +103,9 @@ class WebcamCamera(BaseCamera):
         self._cap.release()
         print("[WebcamCamera] Released.")
 
+    def get(self, prop):
+        return self._cap.get(prop)
+
 
 class VideoFileCamera(BaseCamera):
     """
