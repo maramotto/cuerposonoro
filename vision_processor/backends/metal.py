@@ -96,11 +96,17 @@ class MetalPoseEstimator(BasePoseEstimator):
         Run pose estimation using Metal GPU delegate.
 
         Returns a PoseLandmarkerResult (Tasks API object).
+
+        Nota: el delegate Metal en Mac requiere formato SRGBA (con canal alfa),
+        no SRGB. Usar SRGB provoca un crash en gpu_buffer_storage_cv_pixel_buffer
+        con "unsupported ImageFrame format: 1".
         """
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Metal necesita RGBA, no RGB
+        rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+        rgba_frame = np.ascontiguousarray(rgba_frame, dtype=np.uint8)
         mp_image = self._mp.Image(
-            image_format=self._mp.ImageFormat.SRGB,
-            data=rgb_frame,
+            image_format=self._mp.ImageFormat.SRGBA,
+            data=rgba_frame,
         )
         self._frame_timestamp_ms += 33  # ~30 FPS
         return self._landmarker.detect_for_video(mp_image, self._frame_timestamp_ms)
