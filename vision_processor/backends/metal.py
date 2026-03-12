@@ -84,7 +84,7 @@ class MetalPoseEstimator(BasePoseEstimator):
         self._landmarker = vision.PoseLandmarker.create_from_options(options)
         self._frame_timestamp_ms = 0
 
-        # Para dibujar el esqueleto usamos las utilidades estándar de MediaPipe
+        # Drawing utilities from the legacy MediaPipe solutions API
         self._mp_pose = mp.solutions.pose
         self._mp_drawing = mp.solutions.drawing_utils
         self._mp_drawing_styles = mp.solutions.drawing_styles
