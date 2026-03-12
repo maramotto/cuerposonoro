@@ -1,97 +1,101 @@
 """
-Pose estimation module using MediaPipe.
+Pose estimation module for Cuerpo Sonoro.
+
+Provides a common interface (BasePoseEstimator) and automatic backend
+selection based on available hardware:
+
+  - TensorRT  → NVIDIA Jetson (GPU Ampere)
+  - Metal     → Mac Apple Silicon (GPU M1/M2/M3/M4)
+  - CPU       → any machine (fallback, uses MediaPipe on CPU)
+
+The rest of the pipeline (features, MIDI, modes) never needs to know
+which backend is active. All backends expose the same four methods:
+
+    estimator.estimate(frame)
+    estimator.get_landmarks(results)
+    estimator.draw_skeleton(frame, results)
+    estimator.release()
 """
 
-import mediapipe as mp
-import cv2
+from abc import ABC, abstractmethod
 import numpy as np
 
 
-class PoseEstimator:
-    """Wrapper for MediaPipe Pose estimation."""
+class BasePoseEstimator(ABC):
+    """
+    Abstract base class for all pose estimation backends.
 
-    def __init__(
-            self,
-            model_complexity: int = 1,
-            min_detection_confidence: float = 0.5,
-            min_tracking_confidence: float = 0.5
-    ):
-        """
-        Initialize pose estimator.
+    Defines the interface that main.py and Config rely on.
+    Any backend must implement all four methods below.
+    """
 
-        Args:
-            model_complexity: 0=lite, 1=full, 2=heavy
-            min_detection_confidence: Minimum detection confidence [0.0-1.0]
-            min_tracking_confidence: Minimum tracking confidence [0.0-1.0]
-        """
-        self.mp_pose = mp.solutions.pose
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
-
-        self.pose = self.mp_pose.Pose(
-            model_complexity=model_complexity,
-            min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=min_tracking_confidence
-        )
-
+    @abstractmethod
     def estimate(self, frame: np.ndarray):
         """
-        Estimate pose from BGR frame.
+        Run pose estimation on a BGR frame.
 
         Args:
-            frame: BGR image from OpenCV
+            frame: BGR image from OpenCV (numpy array).
 
         Returns:
-            MediaPipe pose results (None if no pose detected)
+            Backend-specific result object passed to get_landmarks()
+            and draw_skeleton(). Treat it as opaque outside the backend.
         """
-        # MediaPipe needs RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.pose.process(rgb_frame)
-        return results
 
-    def draw_skeleton(self, frame: np.ndarray, results) -> np.ndarray:
-        """
-        Draw pose skeleton on frame.
-
-        Args:
-            frame: BGR image to draw on
-            results: MediaPipe pose results
-
-        Returns:
-            Frame with skeleton drawn
-        """
-        if results.pose_landmarks:
-            self.mp_drawing.draw_landmarks(
-                frame,
-                results.pose_landmarks,
-                self.mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
-            )
-        return frame
-
+    @abstractmethod
     def get_landmarks(self, results) -> list | None:
         """
-        Extract landmarks as list of (x, y, z, visibility).
+        Extract landmarks from estimation results.
 
         Args:
-            results: MediaPipe pose results
+            results: Object returned by estimate().
 
         Returns:
-            List of 33 landmarks or None if no pose detected
+            List of 33 dicts with keys {x, y, z, visibility},
+            or None if no pose was detected.
         """
-        if not results.pose_landmarks:
-            return None
 
-        landmarks = []
-        for lm in results.pose_landmarks.landmark:
-            landmarks.append({
-                'x': lm.x,
-                'y': lm.y,
-                'z': lm.z,
-                'visibility': lm.visibility
-            })
-        return landmarks
+    @abstractmethod
+    def draw_skeleton(self, frame: np.ndarray, results) -> np.ndarray:
+        """
+        Draw pose skeleton on a frame.
 
+        Args:
+            frame:   BGR image to draw on.
+            results: Object returned by estimate().
+
+        Returns:
+            Frame with skeleton drawn (may be the same object modified
+            in place, or a new array — callers must not assume either).
+        """
+
+    @abstractmethod
     def release(self):
-        """Release resources."""
-        self.pose.close()
+        """Release all resources held by this backend."""
+
+
+# ---------------------------------------------------------------------------
+# Keep PoseEstimator as a public name for backwards compatibility.
+# Config and any external code that imports PoseEstimator directly
+# will get the CPU backend, which is identical to the original class.
+# ---------------------------------------------------------------------------
+
+def PoseEstimator(
+    model_complexity: int = 1,
+    min_detection_confidence: float = 0.5,
+    min_tracking_confidence: float = 0.5,
+):
+    """
+    Backwards-compatible factory.
+
+    Returns a CPUPoseEstimator. Existing code that does:
+        from vision_processor.pose import PoseEstimator
+        pose = PoseEstimator(model_complexity=1)
+    continues to work without any changes.
+    """
+    from vision_processor.backends.cpu import CPUPoseEstimator
+    return CPUPoseEstimator(
+        model_complexity=model_complexity,
+        min_detection_confidence=min_detection_confidence,
+        min_tracking_confidence=min_tracking_confidence,
+    )

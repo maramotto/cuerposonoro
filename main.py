@@ -154,6 +154,13 @@ def _parse_args():
         dest="midi_mode",
         help="Override output.midi_mode from config.yaml (only used when --mode midi).",
     )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["cpu", "metal", "tensorrt"],
+        default=None,
+        help="Force a specific pose estimation backend (default: auto-detect).",
+    )
     return parser.parse_args()
 
 
@@ -179,6 +186,8 @@ def main():
         print(f"[main] Source: webcam device {config.camera_device_id}")
     if args.debug:
         print("[main] Debug overlay: ON")
+    if args.backend:
+        overrides["pose.backend"] = args.backend
 
     # --- Pipeline components ---
     try:
