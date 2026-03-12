@@ -136,8 +136,8 @@ def run_preview(cap, pose_estimator, combo_name: str, timeout: int = 10):
     start_time = time.time()
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        frame = cap.read()
+        if frame is None:
             break
 
         # Run pose detection and draw skeleton
@@ -321,8 +321,8 @@ def run_single_benchmark(combo: dict, config: Config,
         print(f"  Warming up ({warmup_frames} frames)...")
         prev_landmarks = None
         for _ in range(warmup_frames):
-            ret, frame = cap.read()
-            if not ret:
+            frame = cap.read()
+            if frame is None:
                 break
             results = pose_estimator.estimate(frame)
             landmarks = pose_estimator.get_landmarks(results)
@@ -341,10 +341,11 @@ def run_single_benchmark(combo: dict, config: Config,
         logger.start_frame()
 
         # Stage 1: Capture
-        ret, frame = cap.read()
+        frame = cap.read()
+
         logger.mark("capture")
 
-        if not ret:
+        if frame is None:
             print("  ERROR: Failed to read frame. Stopping.")
             break
 
